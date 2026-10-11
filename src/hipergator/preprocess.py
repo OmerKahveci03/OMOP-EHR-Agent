@@ -32,7 +32,7 @@ def raw_csv_to_parquet(raw_file: str, write_dir: str, meta_dir: str, overwrite: 
     print(f" - Reading {file_type}...\n")
 
     # -- Loading --
-    df: pd.DataFrame = pd.read_csv(raw_file)
+    df: pd.DataFrame = pd.read_csv(raw_file, low_memory=False)
     shape: tuple[int, int] = df.shape
     print(f"  - Loaded {file_type} with shape: {shape}\n")
 
@@ -40,10 +40,14 @@ def raw_csv_to_parquet(raw_file: str, write_dir: str, meta_dir: str, overwrite: 
         if "concept_id" in col or col == PID:
             df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
 
+        elif df[col].dtype == "object":
+            df[col] = df[col].astype("string")
+
     # -- Save Metadata --
     meta_fp: str = os.path.join(meta_dir, f"{file_type}_metadata.csv")
     meta_df: pd.DataFrame = df.dtypes.rename_axis("column").to_frame("dtype")
     meta_df["row_count"] = shape[0]
+    meta_df["pct_missing"] = df.isna().mean().mul(100)
     if PID in df.columns:
         meta_df[f"{PID}_nunique"] = df[PID].nunique()
 
