@@ -7,8 +7,8 @@ import torch
 
 import pandas as pd
 
-from typing import Literal
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, PreTrainedModel 
+from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, PreTrainedModel
+from transformers.tokenization_utils_base import BatchEncoding
 
 from . import LLAMA_PATH
 from .utils.paths import get_path
@@ -33,16 +33,21 @@ def generate(model: PreTrainedModel,
         {"role": "user", "content": user}
     ]
 
-    inputs: torch.Tensor = tokenizer.apply_chat_template(messages, 
-                                                         add_generation_prompt=True, 
-                                                         return_tensors="pt")\
-                                                            .to(model.device)
-    output: torch.Tensor = model.generate(inputs, 
-                                          max_new_tokens=max_new_tokens, 
-                                          do_sample=False,
-                                          pad_token_id=tokenizer.eos_token_id)
+    inputs: BatchEncoding = tokenizer.apply_chat_template(
+        messages,
+        add_generation_prompt=True,
+        return_tensors="pt",
+        return_dict=True,
+    ).to(model.device)
 
-    return tokenizer.decode(output[0, inputs.shape[-1]:], 
+    output: torch.Tensor = model.generate(
+        **inputs,
+        max_new_tokens=max_new_tokens,
+        do_sample=False,
+        pad_token_id=tokenizer.eos_token_id,
+    )
+
+    return tokenizer.decode(output[0, inputs["input_ids"].shape[-1]:], 
                             skip_special_tokens=True).strip()
 
 
@@ -173,7 +178,7 @@ def search_patient(person_id: int, request: str,
     context_limit: int = min(5000, model.config.max_position_embeddings - 1024)
     evidence: list[dict] = fit_evidence(evidence=evidence, 
                                         tokenizer=tokenizer, 
-                                        context_limit=context_limit)
+                                        max_tokens=context_limit)
 
     answer: str = generate(
         model, tokenizer,
@@ -190,12 +195,12 @@ def search_patient(person_id: int, request: str,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--person_id", type=int)
-    parser.add_argument("--request")
+    parser.add_argument("--person_id", type=int, required=True)
+    parser.add_argument("--request", required=True)
 
     args = parser.parse_args()
 
-    person_id: str = args.person_id
+    person_id: int = args.person_id
     request: str = args.request
 
     cleaned_dir: str = get_path(path_type="cleaned", require_exists=True)
