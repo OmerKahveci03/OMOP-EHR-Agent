@@ -15,6 +15,6 @@ mamba activate /blue/cai6734/omerkahveci/conda_env/general
 
 echo "[SLURM] Slurm job started at: $(date)"
 
-/usr/bin/time -v python -u -m src.hipergator.run_preprocess
+/usr/bin/time -v python -u -m src.hipergator.preprocess
 
 echo "[SLURM] Slurm job finished at: $(date)"

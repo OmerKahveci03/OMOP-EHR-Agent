@@ -1,6 +1,5 @@
 import os
 import glob
-import json
 
 import pandas as pd
 
@@ -8,7 +7,7 @@ import pandas as pd
 from concurrent.futures import Future, ProcessPoolExecutor, as_completed
 from typing import Optional
 
-from . import HPG_BASE_DIR
+from . import HPG_BASE_DIR, PID
 
 from .utils.paths import get_path
 
@@ -38,13 +37,16 @@ def raw_csv_to_parquet(raw_file: str, write_dir: str, meta_dir: str, overwrite: 
     print(f"  - Loaded {file_type} with shape: {shape}\n")
 
     for col in df.columns:
-        if "concept_id" in col:
+        if "concept_id" in col or col == PID:
             df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
 
     # -- Save Metadata --
     meta_fp: str = os.path.join(meta_dir, f"{file_type}_metadata.csv")
     meta_df: pd.DataFrame = df.dtypes.rename_axis("column").to_frame("dtype")
     meta_df["row_count"] = shape[0]
+    if PID in df.columns:
+        meta_df[f"{PID}_nunique"] = df[PID].nunique()
+
     meta_df.to_csv(meta_fp)
 
     # -- Write to part first, then rename once successful --
@@ -73,7 +75,7 @@ def preprocess_data(base_dir: str = HPG_BASE_DIR, max_workers: Optional[int] = N
         futures: list[Future] = [
             executor.submit(raw_csv_to_parquet, 
                             raw_file=raw_file, 
-                            cleaned_dir=cleaned_dir,
+                            write_dir=cleaned_dir,
                             meta_dir=meta_dir,
                             overwrite=overwrite)
 
@@ -82,8 +84,16 @@ def preprocess_data(base_dir: str = HPG_BASE_DIR, max_workers: Optional[int] = N
         for future in as_completed(futures):
             future.result()
 
+    print("\nDone preprocessing data!\n")
     
 
 if __name__ == "__main__":
+    from argparse import ArgumentParser
 
-    preprocess_data()
+    parser = ArgumentParser()
+    parser.add_argument("--overwrite", action="store_true")
+    args = parser.parse_args()
+
+    overwrite: bool = args.overwrite
+
+    preprocess_data(overwrite=overwrite)
