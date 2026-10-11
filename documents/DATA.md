@@ -8,3 +8,8 @@ Downloaded to HiPerGator using:
 # NOTE: You will need credentialled access and a password
 wget -r -N -c -np https://physionet.org/files/mimic-iv-demo-omop/0.9/
 ```
+
+The dataset contains 100 patients. Metadata of the dataset is saved under `documents/metadata_master.csv`. This file is created from running `src/hipergator/preprocess.py`.
+This file is one row per column, and it tells us the inferred dtype, file type it came from,
+number of rows in the file type, and number of unique patients if the file type had a `person_id`
+column.
