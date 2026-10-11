@@ -89,7 +89,26 @@ def preprocess_data(base_dir: str = HPG_BASE_DIR, max_workers: Optional[int] = N
             future.result()
 
     print("\nDone preprocessing data!\n")
-    
+
+    # --- Concat All Metadata ---
+    master_meta_fp: str = os.path.join(meta_dir, "metadata_master.csv")
+    if overwrite or not os.path.exists(master_meta_fp):
+        print("Concatenating all metadata...")
+
+        meta_files: list[str] = glob.glob(os.path.join(meta_dir, "*metadata.csv"))
+        meta_dfs: list[pd.DataFrame] = []
+        for meta_file in meta_files:
+            file_type: str = os.path.basename(meta_file).removesuffix("_metadata.csv")
+            meta_df: pd.DataFrame = pd.read_csv(meta_file)
+
+            meta_df["file_type"] = file_type
+            meta_dfs.append(meta_df)
+
+        meta_df = pd.concat(meta_dfs, ignore_index=True)
+        meta_df.to_csv(master_meta_fp, index=False)
+
+        print("\nDone concatenating all metadata!")
+
 
 if __name__ == "__main__":
     from argparse import ArgumentParser
