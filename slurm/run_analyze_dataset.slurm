@@ -4,7 +4,7 @@
 #SBATCH --error=./logs/run_analyze_dataset_%j.err
 #SBATCH --time=1:00:00
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=1
 #SBATCH --mem=16G
 #SBATCH --account=cai6734
 
