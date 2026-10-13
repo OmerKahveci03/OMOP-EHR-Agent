@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=patient_search_server
-#SBATCH --output=server_%j.out
-#SBATCH --error=server_%j.err
+#SBATCH --output=./logs/server_%j.out
+#SBATCH --error=./logs/server_%j.err
 #SBATCH --time=1:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
