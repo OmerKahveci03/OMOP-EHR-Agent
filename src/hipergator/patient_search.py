@@ -40,12 +40,13 @@ def generate(model: PreTrainedModel,
         return_dict=True,
     ).to(model.device)
 
-    output: torch.Tensor = model.generate(
-        **inputs,
-        max_new_tokens=max_new_tokens,
-        do_sample=False,
-        pad_token_id=tokenizer.eos_token_id,
-    )
+    with torch.inference_mode():
+        output: torch.Tensor = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            pad_token_id=tokenizer.eos_token_id,
+        )
 
     return tokenizer.decode(output[0, inputs["input_ids"].shape[-1]:], 
                             skip_special_tokens=True).strip()
@@ -132,9 +133,20 @@ def fit_evidence(evidence: list[dict],
     return fitted
 
 
-def search_patient(person_id: int, request: str, 
-                   data_dir: str, 
-                   model_path: str = LLAMA_PATH) -> tuple[str, list[dict]]:
+def load_model(model_path: str = LLAMA_PATH) -> tuple[PreTrainedModel, PreTrainedTokenizerBase]:
+    """Load the local model and tokenizer. """
+    tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_path, device_map="auto", torch_dtype="auto", local_files_only=True
+    )
+    model.eval()
+    return model, tokenizer
+
+
+def search_patient(person_id: int, request: str,
+                   data_dir: str,
+                   model: PreTrainedModel,
+                   tokenizer: PreTrainedTokenizerBase) -> tuple[str, list[dict]]:
     """ Given a patient and natural language request, return EHR. """
 
     person_fp: str = os.path.join(data_dir, "person.parquet")
@@ -153,17 +165,6 @@ def search_patient(person_id: int, request: str,
 
     if not available:
         raise ValueError(f"No clinical OMOP Parquet tables found in {data_dir}")
-
-    # --- Prepare Pretrained Tokenizer ---
-    tokenizer: PreTrainedTokenizerBase = AutoTokenizer\
-        .from_pretrained(model_path, local_files_only=True)
-
-    # --- Obtain Pretrained Model ---
-    model: PreTrainedModel = AutoModelForCausalLM\
-        .from_pretrained(model_path, 
-                         device_map="auto", 
-                         torch_dtype="auto", 
-                         local_files_only=True)
 
     # --- Use the Model to Select Tables ---
     selected: list[str] = select_tables(model, tokenizer, request, available)
@@ -204,10 +205,13 @@ if __name__ == "__main__":
     request: str = args.request
 
     cleaned_dir: str = get_path(path_type="cleaned", require_exists=True)
+    model, tokenizer = load_model()
 
     results: tuple[str, list[dict]] = search_patient(person_id=person_id, 
                                                      request=request, 
-                                                     data_dir=cleaned_dir)
+                                                     data_dir=cleaned_dir,
+                                                     model=model,
+                                                     tokenizer=tokenizer)
     answer, evidence = results
 
     print("\nAnswer:\n" + answer)
