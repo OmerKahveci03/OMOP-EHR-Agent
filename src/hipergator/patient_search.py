@@ -11,6 +11,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenize
 from transformers.tokenization_utils_base import BatchEncoding
 
 from . import LLAMA_PATH
+from .concepts import add_concept_names, load_concept_names
 from .utils.paths import get_path
 
 CLINICAL_TABLES: tuple[str] = (
@@ -146,7 +147,8 @@ def load_model(model_path: str = LLAMA_PATH) -> tuple[PreTrainedModel, PreTraine
 def search_patient(person_id: int, request: str,
                    data_dir: str,
                    model: PreTrainedModel,
-                   tokenizer: PreTrainedTokenizerBase) -> tuple[str, list[dict]]:
+                   tokenizer: PreTrainedTokenizerBase,
+                   concept_names: dict[int, str]) -> tuple[str, list[dict]]:
     """ Given a patient and natural language request, return EHR. """
 
     person_fp: str = os.path.join(data_dir, "person.parquet")
@@ -176,6 +178,10 @@ def search_patient(person_id: int, request: str,
 
                               for name in selected]]
 
+    # The model and the frontend should see the same concept names. Enrich
+    # before fitting so the names count toward the model's context limit.
+    evidence = add_concept_names(evidence, concept_names)
+
     context_limit: int = min(5000, model.config.max_position_embeddings - 1024)
     evidence: list[dict] = fit_evidence(evidence=evidence, 
                                         tokenizer=tokenizer, 
@@ -186,7 +192,9 @@ def search_patient(person_id: int, request: str,
         "Answer the user's question using only the supplied OMOP rows. "
         "Cite supporting records as [table:record_id], using the actual table and "
         "record ID field shown in the data. If the rows do not support an answer, "
-        "say so. Do not infer a diagnosis or treatment from incomplete records.",
+        "say so. Do not infer a diagnosis or treatment from incomplete records. "
+        "Dates in this de-identified dataset are shifted, sometimes by more than "
+        "a century. Keep dates as recorded, but do not describe them as future events.",
         f"Question: {request}\nPerson ID: {person_id}\n"
         f"Evidence (some tables may be truncated): {json.dumps(evidence)}",
         max_new_tokens=512,
@@ -206,12 +214,14 @@ if __name__ == "__main__":
 
     cleaned_dir: str = get_path(path_type="cleaned", require_exists=True)
     model, tokenizer = load_model()
+    concept_names = load_concept_names(cleaned_dir)
 
     results: tuple[str, list[dict]] = search_patient(person_id=person_id, 
                                                      request=request, 
                                                      data_dir=cleaned_dir,
                                                      model=model,
-                                                     tokenizer=tokenizer)
+                                                     tokenizer=tokenizer,
+                                                     concept_names=concept_names)
     answer, evidence = results
 
     print("\nAnswer:\n" + answer)
