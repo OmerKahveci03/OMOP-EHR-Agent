@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { serializeSearchRequest } from './searchPayload.js'
 
 export default function App() {
   const [personId, setPersonId] = useState('')
@@ -9,9 +10,11 @@ export default function App() {
 
   async function search(event) {
     event.preventDefault()
-    const id = Number(personId)
-    if (!Number.isSafeInteger(id) || id < 1) {
-      setError('Enter a positive patient ID.')
+    let requestBody
+    try {
+      requestBody = serializeSearchRequest(personId, question.trim())
+    } catch (cause) {
+      setError(cause.message)
       return
     }
     if (!question.trim()) {
@@ -26,13 +29,13 @@ export default function App() {
       const response = await fetch('/patient-search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ person_id: id, request: question.trim() }),
+        body: requestBody,
       })
-      const body = await response.json().catch(() => null)
+      const responseBody = await response.json().catch(() => null)
       if (!response.ok) {
-        throw new Error(body?.error || `Search failed (HTTP ${response.status}).`)
+        throw new Error(responseBody?.error || `Search failed (HTTP ${response.status}).`)
       }
-      setResult(body)
+      setResult(responseBody)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Search failed.')
     } finally {
@@ -62,9 +65,8 @@ export default function App() {
             <input
               className="field-control"
               id="person-id"
-              type="number"
-              min="1"
-              step="1"
+              type="text"
+              inputMode="numeric"
               placeholder="e.g. 1001"
               value={personId}
               onChange={(event) => setPersonId(event.target.value)}

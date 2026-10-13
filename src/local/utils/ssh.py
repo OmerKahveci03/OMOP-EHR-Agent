@@ -137,8 +137,9 @@ def server_jobs(gateway: paramiko.Transport, username: str) -> list[tuple[str, s
     return jobs
 
 
-def show_server_log(sftp: paramiko.SFTPClient, path: str, offset: int) -> int:
-    """Print new Slurm stdout without rereading earlier output."""
+def show_server_log(sftp: paramiko.SFTPClient, path: str, offset: int) -> tuple[int, str]:
+    """Print new Slurm output and return it for startup checks."""
+    text = ""
     try:
         size = sftp.stat(path).st_size
         if size < offset:
@@ -148,11 +149,12 @@ def show_server_log(sftp: paramiko.SFTPClient, path: str, offset: int) -> int:
                 log.seek(offset)
                 data = log.read(min(size - offset, 65536))
             if data:
-                print(data.decode("utf-8", errors="replace"), end="", flush=True)
+                text = data.decode("utf-8", errors="replace")
+                print(text, end="", flush=True)
                 offset += len(data)
     except OSError:
         pass  # Slurm may not have created the output file yet.
-    return offset
+    return offset, text
 
 
 def job_stdout_path(gateway: paramiko.Transport, job_id: str, repo_dir: str) -> str:
@@ -196,7 +198,7 @@ def ensure_server_job(
         last_report = 0.0
         while time.monotonic() < deadline:
             matches = [job for job in server_jobs(gateway, username) if job[0] == job_id]
-            offset = show_server_log(sftp, log_path, offset)
+            offset, _ = show_server_log(sftp, log_path, offset)
             if not matches:
                 if not jobs and time.monotonic() - submitted_at < 30:
                     time.sleep(5)
@@ -224,21 +226,30 @@ def wait_for_model_server(
     sftp = paramiko.SFTPClient.from_transport(gateway)
     try:
         offset = 0
+        error_offset = 0
+        error_path = log_path.removesuffix(".out") + ".err"
+        model_loaded = False
+        recent_output = ""
         deadline = time.monotonic() + 1200
         last_report = time.monotonic()
         print("Waiting for model server to accept connections...", flush=True)
         while time.monotonic() < deadline:
-            offset = show_server_log(sftp, log_path, offset)
-            try:
-                probe = gateway.open_channel(
-                    "direct-tcpip", (server_host, SERVER_PORT), ("127.0.0.1", 0), timeout=5
-                )
-                if probe is not None:
-                    probe.close()
-                    print("Model server is ready.", flush=True)
-                    return
-            except (OSError, paramiko.SSHException):
-                pass
+            offset, output = show_server_log(sftp, log_path, offset)
+            error_offset, _ = show_server_log(sftp, error_path, error_offset)
+            recent_output = (recent_output + output)[-200:]
+            if "Model loaded; starting patient search server." in recent_output:
+                model_loaded = True
+            if model_loaded:
+                try:
+                    probe = gateway.open_channel(
+                        "direct-tcpip", (server_host, SERVER_PORT), ("127.0.0.1", 0), timeout=5
+                    )
+                    if probe is not None:
+                        probe.close()
+                        print("Model server is ready.", flush=True)
+                        return
+                except (OSError, paramiko.SSHException):
+                    pass
             if not any(job[0] == job_id for job in server_jobs(gateway, username)):
                 raise RuntimeError(f"Server job {job_id} stopped before the model server was ready")
             if time.monotonic() - last_report >= 30:
