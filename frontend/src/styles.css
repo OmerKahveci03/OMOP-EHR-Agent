@@ -287,28 +287,85 @@
           margin-top: 18px;
           border: 1px solid #e3eae6;
           border-radius: 10px;
-          overflow: hidden;
+          background: #fff;
 
           .evidence-title {
             display: flex;
+            align-items: center;
             justify-content: space-between;
-            gap: 10px;
-            padding: 11px 14px;
+            flex-wrap: wrap;
+            gap: 8px 18px;
+            padding: 13px 16px;
+            border-radius: 10px 10px 0 0;
             background: #f6f9f7;
             font-size: 13px;
+
+            .evidence-heading {
+              display: flex;
+              align-items: baseline;
+              flex-wrap: wrap;
+              gap: 8px;
+
+              .evidence-table-name {
+                margin: 0;
+                font-size: 14px;
+              }
+
+              .evidence-table-code {
+                color: #71877e;
+                font-size: 11px;
+                font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+              }
+            }
 
             .evidence-count {
               color: #6a8379;
             }
           }
 
-          .evidence-json {
-            max-height: 320px;
-            margin: 0;
-            padding: 14px;
+          .evidence-scroll {
+            max-height: 420px;
             overflow: auto;
-            color: #284840;
-            font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+
+            .records-table {
+              width: 100%;
+              border-collapse: separate;
+              border-spacing: 0;
+              font-size: 12px;
+              text-align: left;
+
+              .records-head {
+                position: sticky;
+                top: 0;
+                z-index: 1;
+                background: #edf4f0;
+                color: #476b5d;
+              }
+
+              .records-body {
+                .records-row:nth-child(even) {
+                  background: #f9fbfa;
+                }
+              }
+
+              .records-cell {
+                max-width: 240px;
+                min-width: 90px;
+                padding: 10px 12px;
+                border-top: 1px solid #e8efeb;
+                vertical-align: top;
+                overflow-wrap: anywhere;
+                line-height: 1.45;
+              }
+            }
+          }
+
+          .evidence-note {
+            margin: 0;
+            padding: 10px 16px;
+            border-top: 1px solid #e8efeb;
+            color: #6a8379;
+            font-size: 12px;
           }
         }
       }

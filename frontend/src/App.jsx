@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { serializeSearchRequest } from './searchPayload.js'
+import EvidenceTable from './EvidenceTable.jsx'
 
 const statusLabels = {
   offline: 'Local server offline',
@@ -215,13 +216,7 @@ export default function App() {
           <details className="evidence">
             <summary className="evidence-toggle">View retrieved records ({result.evidence?.length ?? 0} tables)</summary>
             {(result.evidence ?? []).map((item, index) => (
-              <div className="evidence-table" key={`${item.table}-${index}`}>
-                <div className="evidence-title">
-                  <strong className="evidence-table-name">{item.table}</strong>
-                  <span className="evidence-count">{item.total_rows} matching rows</span>
-                </div>
-                <pre className="evidence-json">{JSON.stringify(item.shown_rows, null, 2)}</pre>
-              </div>
+              <EvidenceTable item={item} key={`${item.table}-${index}`} />
             ))}
           </details>
         </section>

@@ -11,6 +11,7 @@ from flask import Flask, jsonify, request as flask_request
 
 from . import LLAMA_PATH, SERVER_PORT
 from .patient_search import load_model, search_patient
+from .concepts import add_concept_names, load_concept_names
 from .utils.paths import get_path
 
 
@@ -29,6 +30,8 @@ def create_app(model_path: str = LLAMA_PATH) -> Flask:
 
     print("Loading model weights...", flush=True)
     model, tokenizer = load_model(model_path)
+    print("Loading concept names...", flush=True)
+    concept_names = load_concept_names(data_dir)
     print("Model loaded; starting patient search server.", flush=True)
     generation_lock = threading.Lock()
     app = Flask(__name__)
@@ -76,7 +79,7 @@ def create_app(model_path: str = LLAMA_PATH) -> Flask:
         except ValueError as exc:
             return jsonify(error=str(exc)), 404 if "was not found" in str(exc) else 400
 
-        return jsonify(answer=answer, evidence=evidence)
+        return jsonify(answer=answer, evidence=add_concept_names(evidence, concept_names))
 
     return app
 
