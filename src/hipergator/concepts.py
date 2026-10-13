@@ -1,4 +1,4 @@
-"""Resolve OMOP concept IDs in returned evidence for the user interface."""
+"""Resolve OMOP concept IDs in evidence for the model and user interface."""
 
 import os
 

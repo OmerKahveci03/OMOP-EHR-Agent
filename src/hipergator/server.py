@@ -11,7 +11,7 @@ from flask import Flask, jsonify, request as flask_request
 
 from . import LLAMA_PATH, SERVER_PORT
 from .patient_search import load_model, search_patient
-from .concepts import add_concept_names, load_concept_names
+from .concepts import load_concept_names
 from .utils.paths import get_path
 
 
@@ -74,12 +74,13 @@ def create_app(model_path: str = LLAMA_PATH) -> Flask:
                                                   request=request, 
                                                   data_dir=data_dir, 
                                                   model=model, 
-                                                  tokenizer=tokenizer)
+                                                  tokenizer=tokenizer,
+                                                  concept_names=concept_names)
 
         except ValueError as exc:
             return jsonify(error=str(exc)), 404 if "was not found" in str(exc) else 400
 
-        return jsonify(answer=answer, evidence=add_concept_names(evidence, concept_names))
+        return jsonify(answer=answer, evidence=evidence)
 
     return app
 

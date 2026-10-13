@@ -12,7 +12,11 @@ export default function EvidenceTable({ item }) {
           <h3 className="evidence-table-name">{tableLabel(item.table)}</h3>
           <span className="evidence-table-code">{item.table}</span>
         </div>
-        <span className="evidence-count">{item.total_rows} matching {item.total_rows === 1 ? 'row' : 'rows'}</span>
+        <span className="evidence-count">
+          {item.aggregation
+            ? `${item.total_rows} groups from ${item.source_rows} measurements`
+            : `${item.total_rows} matching ${item.total_rows === 1 ? 'row' : 'rows'}`}
+        </span>
       </div>
 
       {rows.length ? (
@@ -37,7 +41,9 @@ export default function EvidenceTable({ item }) {
               </tbody>
             </table>
           </div>
-          {hiddenCount > 0 && <p className="evidence-note">Showing {rows.length} of {item.total_rows} matching rows.</p>}
+          {hiddenCount > 0 && (
+            <p className="evidence-note">Showing {rows.length} of {item.total_rows} {item.aggregation ? 'groups' : 'matching rows'}.</p>
+          )}
         </>
       ) : (
         <p className="evidence-note">{item.total_rows ? 'No rows were included in the model evidence.' : 'No matching rows.'}</p>

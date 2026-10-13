@@ -11,6 +11,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenize
 from transformers.tokenization_utils_base import BatchEncoding
 
 from . import LLAMA_PATH
+from .concepts import add_concept_names, load_concept_names
+from .retrieval import json_records, latest_encounter, patient_table, summarize_measurements
 from .utils.paths import get_path
 
 CLINICAL_TABLES: tuple[str] = (
@@ -52,46 +54,52 @@ def generate(model: PreTrainedModel,
                             skip_special_tokens=True).strip()
 
 
-def select_tables(model: PreTrainedModel, 
-                  tokenizer: PreTrainedTokenizerBase, 
-                  request: str, 
-                  available: list[str]) -> list[str]:
-    """ Uses a pretrained model to select OMOP tables relevant to the request. """
+def select_retrieval_plan(model: PreTrainedModel,
+                          tokenizer: PreTrainedTokenizerBase,
+                          request: str,
+                          available: list[str]) -> tuple[list[str], str]:
+    """Select clinical tables and whether earlier encounters are needed."""
 
     # --- Prompt the Model ---
     response: str = generate(
         model=model,
         tokenizer=tokenizer,
         system=(
-            "Select OMOP tables relevant to the question. "
-            "Return only a JSON array of table names. "
-            "Use only names from the supplied list. "
-            "Select at most five tables. Never generate SQL or Python."
+            "Select OMOP tables relevant to the question and its time scope. "
+            "Return only JSON such as "
+            "{\"tables\":[\"measurement\"],\"scope\":\"latest_encounter\"}. "
+            "Use at most five table names from the supplied list. "
+            "Set scope to 'latest_encounter' by default. Set it to 'history' only "
+            "when the question asks about earlier visits, trends, ever/any-time "
+            "events, or records that may not belong to the latest encounter. "
+            "Never generate SQL or Python."
         ),
         user=f"Available tables: {json.dumps(available)}\nQuestion: {request}",
-        max_new_tokens=128,
+        max_new_tokens=160,
     )
 
     # --- Get Model Response ---
-    match = re.search(r"\[[\s\S]*?\]", response)
+    match = re.search(r"\{[\s\S]*\}", response)
     if not match:
-        raise ValueError(f"Model did not return a table list: {response}")
-
-    names = json.loads(match.group())
-    if not isinstance(names, list) or any(name not in available for name in names):
+        raise ValueError(f"Model did not return a retrieval plan: {response}")
+    plan = json.loads(match.group())
+    names = plan.get("tables") if isinstance(plan, dict) else None
+    scope = plan.get("scope") if isinstance(plan, dict) else None
+    if not isinstance(names, list) or any(not isinstance(name, str) or name not in available for name in names):
         raise ValueError(f"Model selected an unavailable table: {names}")
-
-    return list(dict.fromkeys(names))[:5]
+    if scope not in ("latest_encounter", "history"):
+        raise ValueError(f"Model selected an invalid time scope: {scope}")
+    return list(dict.fromkeys(names))[:5], scope
 
 
 def patient_rows(data_dir: str, table: str, 
-                 person_id: int, limit: int = 100) -> dict[str, str | int | list[dict]]:
+                 person_id: int, limit: int = 100,
+                 scope: str = "history", encounter: dict | None = None) -> dict[str, str | int | list[dict]]:
     """ Load only rows belonging to the patient from the requested table. 
     
     Returns result as dict with the keys: `table`, `total_rows`, `shown_rows`."""
 
-    fp: str = os.path.join(data_dir, f"{table}.parquet")
-    df: pd.DataFrame = pd.read_parquet(fp, filters=[("person_id", "==", person_id)])
+    df: pd.DataFrame = patient_table(data_dir, table, person_id, scope, encounter)
 
     # --- Sort by date if possible ---
     date_columns: list[str] = [
@@ -102,7 +110,7 @@ def patient_rows(data_dir: str, table: str,
     if date_columns:
         df = df.sort_values(date_columns[0], ascending=False, na_position="last")
 
-    rows = json.loads(df.head(limit).to_json(orient="records", date_format="iso"))
+    rows = json_records(df.head(limit))
     return {"table": table, "total_rows": len(df), "shown_rows": rows}
 
 
@@ -111,14 +119,7 @@ def fit_evidence(evidence: list[dict],
                  max_tokens: int) -> list[dict]:
     """Keep the model input within its context window, across all tables."""
 
-    fitted: list[dict] = [
-        {
-            "table": item["table"], 
-            "total_rows": item["total_rows"],
-            "shown_rows": []
-        } 
-        for item in evidence
-    ]
+    fitted: list[dict] = [{**item, "shown_rows": []} for item in evidence]
 
     for row_index in range(max(len(item["shown_rows"]) for item in evidence)):
         for target, source in zip(fitted, evidence):
@@ -146,12 +147,14 @@ def load_model(model_path: str = LLAMA_PATH) -> tuple[PreTrainedModel, PreTraine
 def search_patient(person_id: int, request: str,
                    data_dir: str,
                    model: PreTrainedModel,
-                   tokenizer: PreTrainedTokenizerBase) -> tuple[str, list[dict]]:
+                   tokenizer: PreTrainedTokenizerBase,
+                   concept_names: dict[int, str]) -> tuple[str, list[dict]]:
     """ Given a patient and natural language request, return EHR. """
 
-    person_fp: str = os.path.join(data_dir, "person.parquet")
-    if not os.path.exists(person_fp):
-        raise FileNotFoundError(f"Missing {person_fp}; run preprocessing first")
+    for table in ("person", "visit_occurrence"):
+        path = os.path.join(data_dir, f"{table}.parquet")
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"Missing required OMOP table: {path}; run preprocessing first")
 
     # Keys are `table`, `total_rows`, `shown_rows` 
     person: dict = patient_rows(data_dir, "person", person_id, 1)
@@ -160,21 +163,31 @@ def search_patient(person_id: int, request: str,
         raise ValueError(f"person_id {person_id} was not found in PERSON")
 
     available: list[str] = [name for name in CLINICAL_TABLES
-                            if name != "person" and 
-                            os.path.exists(os.path.join(data_dir, f"{name}.parquet"))]
+                            if name not in ("person", "visit_occurrence") and
+                            os.path.isfile(os.path.join(data_dir, f"{name}.parquet"))]
 
-    if not available:
-        raise ValueError(f"No clinical OMOP Parquet tables found in {data_dir}")
+    selected, scope = select_retrieval_plan(model, tokenizer, request, available)
+    encounter = latest_encounter(data_dir, person_id) if scope == "latest_encounter" else None
+    if scope == "latest_encounter" and encounter is None:
+        raise ValueError(f"person_id {person_id} has no VISIT_OCCURRENCE record")
 
-    # --- Use the Model to Select Tables ---
-    selected: list[str] = select_tables(model, tokenizer, request, available)
+    visits = patient_rows(data_dir, "visit_occurrence", person_id,
+                          scope=scope, encounter=encounter)
+    evidence: list[dict] = [person, visits]
+    for name in selected:
+        if name == "measurement":
+            measurements = patient_table(data_dir, name, person_id, scope, encounter)
+            evidence.append(summarize_measurements(measurements))
+        else:
+            evidence.append(patient_rows(data_dir, name, person_id,
+                                         scope=scope, encounter=encounter))
 
-    evidence: list[dict] = [person,
-                            *[patient_rows(data_dir=data_dir, 
-                                           table=name, 
-                                           person_id=person_id)
+    for item in evidence:
+        item["retrieval_scope"] = scope
 
-                              for name in selected]]
+    # The model and the frontend should see the same concept names. Enrich
+    # before fitting so the names count toward the model's context limit.
+    evidence = add_concept_names(evidence, concept_names)
 
     context_limit: int = min(5000, model.config.max_position_embeddings - 1024)
     evidence: list[dict] = fit_evidence(evidence=evidence, 
@@ -185,9 +198,18 @@ def search_patient(person_id: int, request: str,
         model, tokenizer,
         "Answer the user's question using only the supplied OMOP rows. "
         "Cite supporting records as [table:record_id], using the actual table and "
-        "record ID field shown in the data. If the rows do not support an answer, "
-        "say so. Do not infer a diagnosis or treatment from incomplete records.",
+        "record ID field shown in the data. Cite aggregate measurement statistics "
+        "as [measurement_summary:summary_id]; a summary ID identifies a computed "
+        "group rather than an individual source record. "
+        "If the rows do not support an answer, "
+        "say so. Do not infer a diagnosis or treatment from incomplete records. "
+        "Dates in this de-identified dataset are shifted, sometimes by more than "
+        "a century. Keep dates as recorded, but do not describe them as future events.",
         f"Question: {request}\nPerson ID: {person_id}\n"
+        f"Retrieval scope: {scope}. "
+        "Measurement summaries group all matching numeric values by visit, type, and unit; "
+        "std is sample standard deviation, and non-numeric values are counted separately. "
+        "Do not claim to have seen individual measurement rows beyond the summary.\n"
         f"Evidence (some tables may be truncated): {json.dumps(evidence)}",
         max_new_tokens=512,
     )
@@ -206,12 +228,14 @@ if __name__ == "__main__":
 
     cleaned_dir: str = get_path(path_type="cleaned", require_exists=True)
     model, tokenizer = load_model()
+    concept_names = load_concept_names(cleaned_dir)
 
     results: tuple[str, list[dict]] = search_patient(person_id=person_id, 
                                                      request=request, 
                                                      data_dir=cleaned_dir,
                                                      model=model,
-                                                     tokenizer=tokenizer)
+                                                     tokenizer=tokenizer,
+                                                     concept_names=concept_names)
     answer, evidence = results
 
     print("\nAnswer:\n" + answer)
