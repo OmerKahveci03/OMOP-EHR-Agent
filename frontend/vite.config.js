@@ -11,6 +11,10 @@ export default defineConfig({
         timeout: 900000,
         proxyTimeout: 900000,
       },
+      '/random-person': {
+        target: 'http://127.0.0.1:8765',
+        changeOrigin: true,
+      },
     },
   },
 })

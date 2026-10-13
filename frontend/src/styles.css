@@ -15,6 +15,7 @@
   .masthead {
     display: flex;
     align-items: flex-start;
+    flex-wrap: wrap;
     gap: 18px;
     margin-bottom: 36px;
 
@@ -31,6 +32,9 @@
     }
 
     .masthead-copy {
+      flex: 1;
+      min-width: 210px;
+
       .eyebrow {
         margin: 1px 0 8px;
         color: #488272;
@@ -50,6 +54,29 @@
         margin: 12px 0 0;
         color: #667d77;
         line-height: 1.5;
+      }
+    }
+
+    .random-person-button {
+      margin-left: auto;
+      padding: 10px 13px;
+      border: 1px solid #bcd8cb;
+      border-radius: 10px;
+      background: #fff;
+      color: #246e58;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+      cursor: pointer;
+
+      &:hover:not(:disabled) {
+        background: #e8f3ee;
+      }
+
+      &:disabled {
+        opacity: 0.65;
+        cursor: wait;
       }
     }
   }

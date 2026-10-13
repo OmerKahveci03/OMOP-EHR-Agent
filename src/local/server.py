@@ -21,26 +21,15 @@ from .utils.ssh import TunnelServer, connect_ssh, ensure_server_job, wait_for_mo
 def create_app(tunnel_port: int) -> Flask:
     app = Flask(__name__)
 
-    @app.post("/patient-search")
-    def patient_search():
-        payload = flask_request.get_json(silent=True)
-        if not isinstance(payload, dict):
-            return jsonify(error="Expected a JSON object"), 400
-        person_id = payload.get("person_id")
-        request = payload.get("request")
-        if isinstance(person_id, bool) or not isinstance(person_id, int):
-            return jsonify(error="person_id must be an integer"), 400
-        if not isinstance(request, str) or not request.strip():
-            return jsonify(error="request must be a nonempty string"), 400
-
+    def forward_upstream(path: str, data: bytes | None = None, timeout: int = 30):
         upstream = Request(
-            f"http://127.0.0.1:{tunnel_port}/patient-search",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
+            f"http://127.0.0.1:{tunnel_port}{path}",
+            data=data,
+            headers={"Content-Type": "application/json"} if data is not None else {},
+            method="POST" if data is not None else "GET",
         )
         try:
-            with urlopen(upstream, timeout=900) as response:
+            with urlopen(upstream, timeout=timeout) as response:
                 return Response(
                     response.read(), status=response.status,
                     content_type=response.headers.get("Content-Type", "application/json"),
@@ -53,6 +42,24 @@ def create_app(tunnel_port: int) -> Flask:
         except (URLError, OSError) as exc:
             app.logger.warning("HiPerGator connection failed: %s", exc)
             return jsonify(error="HiPerGator server is unavailable"), 502
+
+    @app.get("/random-person")
+    def random_person():
+        return forward_upstream("/random-person")
+
+    @app.post("/patient-search")
+    def patient_search():
+        payload = flask_request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify(error="Expected a JSON object"), 400
+        person_id = payload.get("person_id")
+        request = payload.get("request")
+        if isinstance(person_id, bool) or not isinstance(person_id, int):
+            return jsonify(error="person_id must be an integer"), 400
+        if not isinstance(request, str) or not request.strip():
+            return jsonify(error="request must be a nonempty string"), 400
+
+        return forward_upstream("/patient-search", json.dumps(payload).encode("utf-8"), 900)
 
     return app
 

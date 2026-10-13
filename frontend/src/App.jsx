@@ -7,6 +7,28 @@ export default function App() {
   const [result, setResult] = useState(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [randomLoading, setRandomLoading] = useState(false)
+
+  async function chooseRandomPerson() {
+    setRandomLoading(true)
+    setError('')
+    try {
+      const response = await fetch('/random-person')
+      const body = await response.json().catch(() => null)
+      if (!response.ok) {
+        throw new Error(body?.error || `Could not get a patient ID (HTTP ${response.status}).`)
+      }
+      if (typeof body?.person_id !== 'string' || !/^-?[0-9]+$/.test(body.person_id)) {
+        throw new Error('The server returned an invalid patient ID.')
+      }
+      setPersonId(body.person_id)
+      setResult(null)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not get a patient ID.')
+    } finally {
+      setRandomLoading(false)
+    }
+  }
 
   async function search(event) {
     event.preventDefault()
@@ -52,6 +74,14 @@ export default function App() {
           <h1 className="page-title">Patient search</h1>
           <p className="subtitle">Ask a question and review the records behind the answer.</p>
         </div>
+        <button
+          className="random-person-button"
+          type="button"
+          onClick={chooseRandomPerson}
+          disabled={loading || randomLoading}
+        >
+          {randomLoading ? 'Choosing…' : 'Random patient'}
+        </button>
       </header>
 
       <section className="panel" aria-labelledby="search-heading">
@@ -70,7 +100,7 @@ export default function App() {
               placeholder="e.g. 1001"
               value={personId}
               onChange={(event) => setPersonId(event.target.value)}
-              disabled={loading}
+              disabled={loading || randomLoading}
               required
             />
           </div>
@@ -89,7 +119,7 @@ export default function App() {
           </div>
           <div className="form-footer">
             <p className="form-hint">Answers are based on retrieved OMOP records.</p>
-            <button className="submit-button" type="submit" disabled={loading}>
+            <button className="submit-button" type="submit" disabled={loading || randomLoading}>
               {loading ? 'Searching…' : 'Search patient'}
               {!loading && <span className="button-arrow" aria-hidden="true"> →</span>}
             </button>
