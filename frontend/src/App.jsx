@@ -215,6 +215,12 @@ export default function App() {
           <p className="answer">{result.answer}</p>
           <details className="evidence">
             <summary className="evidence-toggle">View retrieved records ({result.evidence?.length ?? 0} tables)</summary>
+            <p className="evidence-date-note">
+              {result.evidence?.[0]?.retrieval_scope === 'history'
+                ? 'Evidence includes earlier encounters.'
+                : 'Evidence is limited to the latest encounter unless the question requests history.'}
+              {' '}Dates are de-identified and may be shifted by more than a century.
+            </p>
             {(result.evidence ?? []).map((item, index) => (
               <EvidenceTable item={item} key={`${item.table}-${index}`} />
             ))}

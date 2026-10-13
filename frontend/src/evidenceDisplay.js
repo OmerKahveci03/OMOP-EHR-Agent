@@ -9,6 +9,7 @@ export const tableColumns = {
   procedure_occurrence: ['procedure_occurrence_id', 'procedure_datetime', 'procedure_source_value', 'quantity'],
   device_exposure: ['device_exposure_id', 'device_exposure_start_datetime', 'device_exposure_end_datetime', 'device_source_value', 'quantity', 'unique_device_id'],
   measurement: ['measurement_id', 'measurement_datetime', 'measurement_source_value', 'value_as_number', 'value_source_value', 'unit_source_value', 'range_low', 'range_high'],
+  measurement_summary: ['summary_id', 'visit_occurrence_id', 'measurement_concept_id', 'measurement_source_value', 'unit_concept_id', 'unit_source_value', 'result_type', 'count', 'min', 'mean', 'max', 'std', 'latest_value', 'first_date', 'last_date', 'latest_measurement_id'],
   observation: ['observation_id', 'observation_datetime', 'observation_source_value', 'value_as_string', 'value_as_number', 'value_as_concept_id'],
   death: ['person_id', 'death_datetime', 'cause_concept_id', 'death_type_concept_id'],
   specimen: ['specimen_id', 'specimen_datetime', 'specimen_source_value', 'anatomic_site_concept_id', 'disease_status_concept_id'],
@@ -30,6 +31,12 @@ const labels = {
   range_high: 'Range high',
   sig: 'Instructions',
   unique_device_id: 'Device ID',
+  result_type: 'Result type',
+  std: 'Std. dev.',
+  latest_measurement_id: 'Latest measurement ID',
+  summary_id: 'Summary ID',
+  first_date: 'First date',
+  last_date: 'Last date',
 }
 
 export function fieldLabel(field) {

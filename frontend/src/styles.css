@@ -283,6 +283,16 @@
           cursor: pointer;
         }
 
+        .evidence-date-note {
+          margin: 14px 0 0;
+          padding: 10px 12px;
+          border-radius: 8px;
+          background: #f1f5f3;
+          color: #5d756b;
+          font-size: 12px;
+          line-height: 1.5;
+        }
+
         .evidence-table {
           margin-top: 18px;
           border: 1px solid #e3eae6;
