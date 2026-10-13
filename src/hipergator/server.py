@@ -14,7 +14,9 @@ def create_app(model_path: str = LLAMA_PATH) -> Flask:
 
     data_dir: str = get_path("cleaned", require_exists=True)
 
+    print("Loading model weights...", flush=True)
     model, tokenizer = load_model(model_path)
+    print("Model loaded; starting patient search server.", flush=True)
     generation_lock = threading.Lock()
     app = Flask(__name__)
 
