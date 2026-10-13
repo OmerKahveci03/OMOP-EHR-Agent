@@ -81,6 +81,77 @@
     }
   }
 
+  .status-banner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 22px;
+    padding: 13px 16px;
+    border: 1px solid #dbe6e1;
+    border-radius: 12px;
+    background: #fff;
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      flex: none;
+      border-radius: 50%;
+      background: #a3afa9;
+    }
+
+    .status-copy {
+      flex: 1;
+      min-width: 0;
+
+      .status-title {
+        margin: 0;
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .status-detail {
+        margin: 3px 0 0;
+        color: #667d77;
+        font-size: 12px;
+        line-height: 1.4;
+      }
+    }
+
+    .status-retry {
+      padding: 7px 10px;
+      border: 1px solid #bcd8cb;
+      border-radius: 8px;
+      background: #fff;
+      color: #246e58;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+
+      &:hover {
+        background: #e8f3ee;
+      }
+    }
+
+    &.ready {
+      .status-dot {
+        background: #2c9a6d;
+      }
+    }
+
+    &.connecting, &.checking, &.booting {
+      .status-dot {
+        background: #e3a338;
+      }
+    }
+
+    &.error, &.disconnected, &.offline {
+      .status-dot {
+        background: #d36b5d;
+      }
+    }
+  }
+
   .panel {
     box-sizing: border-box;
     padding: 30px;

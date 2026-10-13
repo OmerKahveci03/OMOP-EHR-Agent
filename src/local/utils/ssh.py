@@ -8,6 +8,7 @@ import shlex
 import socket
 import socketserver
 import time
+from typing import Callable
 
 import paramiko
 
@@ -76,7 +77,8 @@ def connect_ssh(
             return [input(prompt) if echo else getpass.getpass(prompt) for prompt, echo in prompts]
 
         allowed = ["keyboard-interactive"]
-        for _ in range(3):
+        failed_attempts = 0
+        for _ in range(10):
             if transport.is_authenticated():
                 break
             if "keyboard-interactive" in allowed:
@@ -85,6 +87,12 @@ def connect_ssh(
                     continue
                 except paramiko.BadAuthenticationType as exc:
                     allowed = exc.allowed_types
+                except paramiko.AuthenticationException:
+                    failed_attempts += 1
+                    if failed_attempts >= 3:
+                        break
+                    print("SSH authentication failed. Please try again.", flush=True)
+                    continue
             if "password" in allowed:
                 try:
                     allowed = transport.auth_password(
@@ -93,11 +101,20 @@ def connect_ssh(
                     continue
                 except paramiko.BadAuthenticationType as exc:
                     allowed = exc.allowed_types
+                except paramiko.AuthenticationException:
+                    failed_attempts += 1
+                    if failed_attempts >= 3:
+                        break
+                    print("SSH authentication failed. Please try again.", flush=True)
+                    continue
             raise paramiko.AuthenticationException(
                 f"SSH requires an unsupported authentication method: {allowed}"
             )
         if not transport.is_authenticated():
-            raise paramiko.AuthenticationException("SSH authentication did not complete")
+            raise paramiko.AuthenticationException(
+                "SSH authentication did not complete after three failed attempts"
+                if failed_attempts >= 3 else "SSH authentication did not complete"
+            )
         transport.set_keepalive(30)
         return transport
     except Exception:
@@ -167,7 +184,8 @@ def job_stdout_path(gateway: paramiko.Transport, job_id: str, repo_dir: str) -> 
 
 
 def ensure_server_job(
-    gateway: paramiko.Transport, username: str, repo_dir: str
+    gateway: paramiko.Transport, username: str, repo_dir: str,
+    on_status: Callable[[str, str], None] | None = None,
 ) -> tuple[str, str, str]:
     """Reuse or submit the Slurm job, then wait for its compute node."""
     jobs = server_jobs(gateway, username)
@@ -176,9 +194,15 @@ def ensure_server_job(
     if jobs:
         job_id = jobs[0][0]
         print(f"Using existing server job {job_id}", flush=True)
+        if on_status:
+            on_status("booting", f"Using server job {job_id}.")
     else:
+        if on_status:
+            on_status("not_running", "No server job is running on HiPerGator.")
         script = posixpath.join(repo_dir, "slurm", "run_server.slurm")
         print(f"Submitting {script}", flush=True)
+        if on_status:
+            on_status("booting", "Submitting the HiPerGator server job.")
         output = remote_command(
             gateway,
             f"sbatch --parsable --chdir={shlex.quote(repo_dir)} {shlex.quote(script)}",
@@ -208,6 +232,8 @@ def ensure_server_job(
             status = (state, node, reason)
             if status != previous or time.monotonic() - last_report >= 30:
                 print(f"Job {job_id}: {state} ({reason})", flush=True)
+                if on_status:
+                    on_status("booting", f"Slurm job {job_id}: {state.lower()} ({reason}).")
                 previous = status
                 last_report = time.monotonic()
             if state == "RUNNING" and node not in ("(null)", "None", ""):
@@ -221,6 +247,7 @@ def ensure_server_job(
 def wait_for_model_server(
     gateway: paramiko.Transport, username: str, job_id: str,
     server_host: str, log_path: str,
+    on_status: Callable[[str, str], None] | None = None,
 ) -> None:
     """Wait until the model has loaded and the HTTP port accepts connections."""
     sftp = paramiko.SFTPClient.from_transport(gateway)
@@ -233,12 +260,16 @@ def wait_for_model_server(
         deadline = time.monotonic() + 1200
         last_report = time.monotonic()
         print("Waiting for model server to accept connections...", flush=True)
+        if on_status:
+            on_status("booting", f"Job {job_id} is running; waiting for model weights to load.")
         while time.monotonic() < deadline:
             offset, output = show_server_log(sftp, log_path, offset)
             error_offset, _ = show_server_log(sftp, error_path, error_offset)
             recent_output = (recent_output + output)[-200:]
-            if "Model loaded; starting patient search server." in recent_output:
+            if not model_loaded and "Model loaded; starting patient search server." in recent_output:
                 model_loaded = True
+                if on_status:
+                    on_status("booting", "Model loaded; waiting for the server port.")
             if model_loaded:
                 try:
                     probe = gateway.open_channel(

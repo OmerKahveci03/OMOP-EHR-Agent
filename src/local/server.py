@@ -3,8 +3,6 @@
 import json
 import os
 import posixpath
-import threading
-import paramiko
 
 from pathlib import Path
 
@@ -13,15 +11,40 @@ from urllib.request import Request, urlopen
 
 from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, request as flask_request
+from flask_sock import Sock
+from simple_websocket import ConnectionClosed
 
-from src.hipergator import SERVER_PORT
-from .utils.ssh import TunnelServer, connect_ssh, ensure_server_job, wait_for_model_server
+from .utils.tunnel import TunnelManager
 
 
-def create_app(tunnel_port: int) -> Flask:
+def create_app(tunnel: TunnelManager) -> Flask:
     app = Flask(__name__)
+    app.config["SOCK_SERVER_OPTIONS"] = {"ping_interval": 25}
+    sock = Sock(app)
+
+    @sock.route("/tunnel/status")
+    def tunnel_status(ws):
+        version = -1
+        try:
+            while True:
+                version, status = tunnel.wait_for_update(version)
+                ws.send(json.dumps(status))
+        except (ConnectionClosed, OSError):
+            pass
+
+    @app.get("/tunnel/status")
+    def current_tunnel_status():
+        return jsonify(tunnel.snapshot())
+
+    @app.post("/tunnel/reconnect")
+    def reconnect_tunnel():
+        tunnel.start()
+        return jsonify(tunnel.snapshot())
 
     def forward_upstream(path: str, data: bytes | None = None, timeout: int = 30):
+        tunnel_port = tunnel.port()
+        if tunnel_port is None:
+            return jsonify(error="HiPerGator tunnel is not ready", status=tunnel.snapshot()), 503
         upstream = Request(
             f"http://127.0.0.1:{tunnel_port}{path}",
             data=data,
@@ -41,6 +64,7 @@ def create_app(tunnel_port: int) -> Flask:
             )
         except (URLError, OSError) as exc:
             app.logger.warning("HiPerGator connection failed: %s", exc)
+            tunnel.mark_disconnected("The HiPerGator server connection was lost.")
             return jsonify(error="HiPerGator server is unavailable"), 502
 
     @app.get("/random-person")
@@ -78,31 +102,15 @@ if __name__ == "__main__":
     if not posixpath.isabs(repo_dir):
         raise SystemExit("HPG_REPO_DIR must be an absolute path on HiPerGator")
 
-    # --- Connect SSH Local -> Hipergator ---
-    gateway: paramiko.Transport = connect_ssh(host, 22, username)
+    tunnel = TunnelManager(host, username, repo_dir)
+    tunnel.start()
     try:
-        # -- Launch The Server Job If Not Accessible --
-        job_id, server_host, log_path = ensure_server_job(gateway, username, repo_dir)
-        # The login node forwards directly to the service on the compute node.
-        wait_for_model_server(gateway, username, job_id, server_host, log_path)
-        tunnel: TunnelServer = TunnelServer(gateway, (server_host, SERVER_PORT))
-        try:
-            tunnel_thread: threading.Thread = threading.Thread(
-                target=tunnel.serve_forever,
-                daemon=True,
-            )
-            tunnel_thread.start()
-            print(f"SSH tunnel ready for {server_host}:{tunnel.destination[1]}", flush=True)
-
-            create_app(tunnel.server_address[1]).run(
-                host="127.0.0.1",
-                port=int(os.getenv("LOCAL_SERVER_PORT", "8765")),
-                debug=False,
-                use_reloader=False,
-            )
-        finally:
-            tunnel.shutdown()
-            tunnel.server_close()
-
+        create_app(tunnel).run(
+            host="127.0.0.1",
+            port=int(os.getenv("LOCAL_SERVER_PORT", "8765")),
+            debug=False,
+            use_reloader=False,
+            threaded=True,
+        )
     finally:
-        gateway.close()
+        tunnel.stop()

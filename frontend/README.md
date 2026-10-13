@@ -1,19 +1,11 @@
-# Patient search frontend
-
-Start the local Python server from the repository root:
-
-```powershell
-python -m src.local.server
-```
-
-In another terminal:
-
 ```powershell
 cd frontend
 npm install
 npm run dev
 ```
 
-Open the URL printed by Vite. The development server forwards `/patient-search`
-to the local Python server on port 8765. If you change `LOCAL_SERVER_PORT` in
-`.env`, update the target in `vite.config.js` too.
+Start the local backend in another terminal with `python -m src.local.server`. The
+frontend shows the HiPerGator tunnel's live status while the backend connects,
+submits the Slurm job, and loads the model. Search becomes available when the
+status says **Running**. If the connection fails, use **Retry**; SSH password and
+Duo prompts appear in the backend terminal.
