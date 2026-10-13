@@ -59,4 +59,4 @@ def create_app(model_path: str = LLAMA_PATH) -> Flask:
 
 if __name__ == "__main__":
     app: Flask = create_app()
-    app.run(host="127.0.0.1", port=SERVER_PORT, debug=False, use_reloader=False)
+    app.run(host="0.0.0.0", port=SERVER_PORT, debug=False, use_reloader=False)

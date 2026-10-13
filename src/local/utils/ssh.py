@@ -217,8 +217,8 @@ def ensure_server_job(
 
 
 def wait_for_model_server(
-    gateway: paramiko.Transport, compute: paramiko.Transport,
-    username: str, job_id: str, log_path: str,
+    gateway: paramiko.Transport, username: str, job_id: str,
+    server_host: str, log_path: str,
 ) -> None:
     """Wait until the model has loaded and the HTTP port accepts connections."""
     sftp = paramiko.SFTPClient.from_transport(gateway)
@@ -230,8 +230,8 @@ def wait_for_model_server(
         while time.monotonic() < deadline:
             offset = show_server_log(sftp, log_path, offset)
             try:
-                probe = compute.open_channel(
-                    "direct-tcpip", ("127.0.0.1", SERVER_PORT), ("127.0.0.1", 0), timeout=5
+                probe = gateway.open_channel(
+                    "direct-tcpip", (server_host, SERVER_PORT), ("127.0.0.1", 0), timeout=5
                 )
                 if probe is not None:
                     probe.close()

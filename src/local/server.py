@@ -6,7 +6,6 @@ import posixpath
 import threading
 import paramiko
 
-from typing import Optional
 from pathlib import Path
 
 from urllib.error import HTTPError, URLError
@@ -77,44 +76,26 @@ if __name__ == "__main__":
     try:
         # -- Launch The Server Job If Not Accessible --
         job_id, server_host, log_path = ensure_server_job(gateway, username, repo_dir)
-        compute_connection: Optional[paramiko.Channel] = gateway.open_channel(
-            "direct-tcpip", 
-            (server_host, 22), 
-            ("127.0.0.1", 0)
-        )
-
-        if compute_connection is None:
-            raise ConnectionError(f"Could not reach compute node {server_host} over SSH")
-
-        # -- Connect SSH Hipergator -> Compute Node --
-        compute: paramiko.Transport = connect_ssh(server_host, 22, username, compute_connection)
-        
+        # The login node forwards directly to the service on the compute node.
+        wait_for_model_server(gateway, username, job_id, server_host, log_path)
+        tunnel: TunnelServer = TunnelServer(gateway, (server_host, SERVER_PORT))
         try:
-            wait_for_model_server(gateway, compute, username, job_id, log_path)
-            tunnel: TunnelServer = TunnelServer(compute, ("127.0.0.1", SERVER_PORT))
-            try:
-                tunnel_thread: threading.Thread = threading.Thread(
-                    target=tunnel.serve_forever, 
-                    daemon=True
-                )
+            tunnel_thread: threading.Thread = threading.Thread(
+                target=tunnel.serve_forever,
+                daemon=True,
+            )
+            tunnel_thread.start()
+            print(f"SSH tunnel ready for {server_host}:{tunnel.destination[1]}", flush=True)
 
-                tunnel_thread.start()
-                print(f"SSH tunnel ready for {server_host}:{tunnel.destination[1]}", flush=True)
-
-                # -- We Are Good To Run the App Once the Tunnel is Established --
-                create_app(tunnel.server_address[1]).run(
-                    host="127.0.0.1",
-                    port=int(os.getenv("LOCAL_SERVER_PORT", "8765")),
-                    debug=False,
-                    use_reloader=False,
-                )
-
-            finally:
-                tunnel.shutdown()
-                tunnel.server_close()
-
+            create_app(tunnel.server_address[1]).run(
+                host="127.0.0.1",
+                port=int(os.getenv("LOCAL_SERVER_PORT", "8765")),
+                debug=False,
+                use_reloader=False,
+            )
         finally:
-            compute.close()
+            tunnel.shutdown()
+            tunnel.server_close()
 
     finally:
         gateway.close()
