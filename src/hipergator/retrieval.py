@@ -4,17 +4,21 @@ import json
 import os
 from numbers import Integral, Real
 
+from typing import Any, Literal, Optional
 import pandas as pd
+
+from .utils.types import ScopeType
 
 
 MAX_SAFE_JSON_INTEGER = 2**53 - 1
+# Tables with an encounter id
 ENCOUNTER_LINKED_TABLES = {
     "visit_occurrence", "visit_detail", "condition_occurrence", "drug_exposure",
     "procedure_occurrence", "device_exposure", "measurement", "observation",
 }
 
 
-def json_scalar(field: str, value):
+def json_scalar(field: str, value: Any) -> str | int | float | None:
     """Convert Pandas scalars and preserve IDs too large for JavaScript numbers."""
     if pd.isna(value):
         return None
@@ -29,7 +33,7 @@ def json_scalar(field: str, value):
 
 
 def json_records(rows: pd.DataFrame) -> list[dict]:
-    records = json.loads(rows.to_json(orient="records", date_format="iso"))
+    records: list[dict] = json.loads(rows.to_json(orient="records", date_format="iso"))
     for row in records:
         for field, value in row.items():
             if field.endswith("_id") and isinstance(value, int) and abs(value) > MAX_SAFE_JSON_INTEGER:
@@ -37,31 +41,44 @@ def json_records(rows: pd.DataFrame) -> list[dict]:
     return records
 
 
-def latest_encounter(data_dir: str, person_id: int) -> dict | None:
+def latest_encounter(data_dir: str, person_id: int) -> dict[str, Any] | None:
     """Return the visit with the latest recorded start time."""
-    path = os.path.join(data_dir, "visit_occurrence.parquet")
-    visits = pd.read_parquet(path, filters=[("person_id", "==", person_id)])
+
+    path: str = os.path.join(data_dir, "visit_occurrence.parquet")
+    visits: pd.DataFrame = pd.read_parquet(path, filters=[("person_id", "==", person_id)])
     if visits.empty:
         return None
-    start = "visit_start_datetime" if "visit_start_datetime" in visits else "visit_start_date"
-    visits = visits.sort_values(start, ascending=False, na_position="last")
-    return json_records(visits.head(1))[0]
+
+    start_col: str = ("visit_start_datetime" 
+                      if "visit_start_datetime" in visits.columns
+                      else "visit_start_date")
+
+    visits = visits.sort_values(start_col, ascending=False, na_position="last").head(1)
+
+    return json_records(rows=visits)[0]
 
 
 def patient_table(data_dir: str, table: str, person_id: int,
-                  scope: str, encounter: dict | None) -> pd.DataFrame:
+                  scope: ScopeType, encounter: Optional[dict]) -> pd.DataFrame:
     """Read patient rows, limiting the default scope by the exact visit ID."""
-    path = os.path.join(data_dir, f"{table}.parquet")
-    filters = [("person_id", "==", person_id)]
+
+    path: str = os.path.join(data_dir, f"{table}.parquet")
+    filters: list[tuple[str, Literal["=="], int]] = [("person_id", "==", person_id)]
+
     if scope == "latest_encounter" and encounter is not None and table in ENCOUNTER_LINKED_TABLES:
         filters.append(("visit_occurrence_id", "==", int(encounter["visit_occurrence_id"])))
-    rows = pd.read_parquet(path, filters=filters)
+
+    rows: pd.DataFrame = pd.read_parquet(path, filters=filters).drop(columns=["person_id"])
+
     if scope == "history":
         return rows
+
     if encounter is None:
         return rows.iloc[0:0]
+
     if table in ENCOUNTER_LINKED_TABLES:
         return rows
+
     # Without an encounter link, a date overlap alone cannot establish that a
     # record belongs to this visit. Such tables require explicit history scope.
     return rows.iloc[0:0]
@@ -69,7 +86,7 @@ def patient_table(data_dir: str, table: str, person_id: int,
 
 def summarize_measurements(rows: pd.DataFrame) -> dict:
     """Summarize numeric results by visit, measurement type, and unit."""
-    source_rows = len(rows)
+    source_rows: int = len(rows)
     if rows.empty:
         return {"table": "measurement_summary", "total_rows": 0,
                 "source_rows": 0, "shown_rows": [], "aggregation": "by_visit_and_type"}

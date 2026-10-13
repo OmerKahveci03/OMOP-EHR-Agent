@@ -11,7 +11,7 @@ from . import HPG_BASE_DIR, PID
 
 from .utils.paths import get_path
 
-def raw_csv_to_parquet(raw_file: str, write_dir: str, meta_dir: str, overwrite: bool):
+def raw_csv_to_parquet(raw_file: str, write_dir: str, meta_dir: str, overwrite: bool) -> None:
     """ Load the raw csv file and write to the `write_dir` as a parquet.
     
     Coerces any 'concept_id' column to `Int64` before doing so."""
@@ -61,14 +61,14 @@ def raw_csv_to_parquet(raw_file: str, write_dir: str, meta_dir: str, overwrite: 
 
 
 def preprocess_data(base_dir: str = HPG_BASE_DIR, max_workers: Optional[int] = None,
-                    overwrite: bool = False):
+                    overwrite: bool = False) -> None:
     """ Convert raw csvs to parquet format. """
 
     raw_dir: str = get_path(path_type="raw", require_exists=True, base_dir=base_dir)
     cleaned_dir: str = get_path(path_type="cleaned", makedir=True, base_dir=base_dir)
     meta_dir: str = get_path(path_type="metadata", makedir=True, base_dir=base_dir)
 
-    print(f" === Preprocessing Raw Data === \n")
+    print(" === Preprocessing Raw Data === \n")
 
     print(f"Reading from: '{raw_dir}'\nWriting to: '{cleaned_dir}'")
 

@@ -1,10 +1,8 @@
 import os
 
-from typing import Literal
-
 from .. import HPG_BASE_DIR
+from .types import PathType
 
-PathType = Literal["raw", "cleaned", "metadata"]
 
 def get_path(path_type: PathType, base_dir: str = HPG_BASE_DIR, 
              makedir: bool = False, require_exists: bool = False) -> str:
