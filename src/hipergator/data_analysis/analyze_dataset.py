@@ -27,7 +27,8 @@ def analyze_dataset(base_dir: str = HPG_BASE_DIR) -> list[str]:
             column for column in df.columns if column.endswith("_concept_id")
         ]
         for column in concept_columns:
-            df[f"{column}_name"] = df[column].map(concept_names)
+            concept_ids: pd.Series = pd.to_numeric(df[column], errors="coerce").astype("Int64")
+            df[f"{column}_name"] = concept_ids.map(concept_names)
 
         # A long format OMOP table has one row per recorded concept. Other
         # concept columns (such as units) are labels, not grouping keys.
