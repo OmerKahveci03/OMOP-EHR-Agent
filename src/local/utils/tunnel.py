@@ -5,7 +5,8 @@ import threading
 import paramiko
 
 from src.hipergator import SERVER_PORT
-from .ssh import TunnelServer, connect_ssh, ensure_server_job, server_jobs, wait_for_model_server
+from .ssh import (TunnelServer, connect_ssh, ensure_server_job, remote_command,
+                  server_jobs, wait_for_model_server)
 
 
 class TunnelManager:
@@ -18,6 +19,10 @@ class TunnelManager:
         self._version = 0
         self._port: int | None = None
         self._gateway: paramiko.Transport | None = None
+        self._job_id: str | None = None
+        self._cancel_job_on_stop = False
+        self._job_cancelled = False
+        self._connection_finished = False
         self._worker: threading.Thread | None = None
         self._stop = threading.Event()
 
@@ -48,6 +53,10 @@ class TunnelManager:
                 return False
             self._stop.clear()
             self._port = None
+            self._job_id = None
+            self._cancel_job_on_stop = False
+            self._job_cancelled = False
+            self._connection_finished = False
             self._publish("connecting", "Enter your SSH password and Duo response in the local terminal.")
             self._worker = threading.Thread(target=self._connect, daemon=True)
             self._worker.start()
@@ -62,10 +71,40 @@ class TunnelManager:
         if gateway is not None:
             gateway.close()
 
-    def stop(self) -> None:
-        self._stop.set()
+    def _remember_job(self, job_id: str) -> None:
         with self._condition:
+            self._job_id = job_id
+            self._condition.notify_all()
+
+    def _cancel_job(self, gateway: paramiko.Transport | None) -> None:
+        """Called with the condition held, before the SSH transport closes."""
+        job_id = self._job_id
+        if not job_id or self._job_cancelled:
+            return
+        if gateway is None or not gateway.is_active():
+            print(f"Could not cancel HiPerGator server job {job_id}: SSH is disconnected", flush=True)
+            return
+        try:
+            remote_command(gateway, f"scancel {job_id}")
+            self._job_cancelled = True
+            print(f"Cancelled HiPerGator server job {job_id}", flush=True)
+        except Exception as exc:
+            print(f"Could not cancel HiPerGator server job {job_id}: {exc}", flush=True)
+
+    def stop(self, cancel_job: bool = False) -> None:
+        """Close the tunnel, optionally cancelling its tracked Slurm job first."""
+        with self._condition:
+            self._stop.set()
+            self._cancel_job_on_stop = cancel_job
+            if cancel_job:
+                self._condition.wait_for(
+                    lambda: self._job_id is not None or self._connection_finished
+                    or self._worker is None,
+                    timeout=20,
+                )
             gateway = self._gateway
+            if cancel_job:
+                self._cancel_job(gateway)
         if gateway is not None:
             gateway.close()
 
@@ -81,7 +120,8 @@ class TunnelManager:
                 self._gateway = gateway
             self._publish("checking", "Checking for a HiPerGator server job.")
             job_id, server_host, log_path = ensure_server_job(
-                gateway, self.username, self.repo_dir, on_status=self._publish
+                gateway, self.username, self.repo_dir, on_status=self._publish,
+                on_job_id=self._remember_job, is_stopped=self._stop.is_set,
             )
             if self._stop.is_set():
                 return
@@ -113,13 +153,17 @@ class TunnelManager:
                 self._publish("error", str(exc))
         finally:
             with self._condition:
+                if self._cancel_job_on_stop and not self._job_cancelled:
+                    self._cancel_job(gateway)
                 self._port = None
                 self._gateway = None
                 if self._status["state"] == "ready":
                     self._publish("disconnected", "The SSH tunnel stopped.")
+                self._connection_finished = True
+                self._condition.notify_all()
+                if gateway is not None:
+                    gateway.close()
             if tunnel is not None:
                 if tunnel_thread is not None and tunnel_thread.is_alive():
                     tunnel.shutdown()
                 tunnel.server_close()
-            if gateway is not None:
-                gateway.close()

@@ -7,48 +7,57 @@ import threading
 
 import pandas as pd
 
-from flask import Flask, jsonify, request as flask_request
+from flask import Flask, Response, jsonify, request as flask_request
 
 from . import LLAMA_PATH, SERVER_PORT
-from .patient_search import load_model, search_patient
-from .concepts import add_concept_names, load_concept_names
+from .patient_search import load_model, run_patient_request
+from .concepts import load_concept_names
 from .utils.paths import get_path
 
 
 @lru_cache(maxsize=1)
 def load_person_ids(data_dir: str) -> tuple[int, ...]:
     """Read the person IDs once, without loading the other PERSON columns."""
-    person_file = os.path.join(data_dir, "person.parquet")
-    ids = pd.read_parquet(person_file, columns=["person_id"])["person_id"]
+
+    person_file: str = os.path.join(data_dir, "person.parquet")
+    ids: pd.Series = pd.read_parquet(person_file, columns=["person_id"])["person_id"]
+
     return tuple(int(value) for value in ids.dropna().unique())
 
 
 def create_app(model_path: str = LLAMA_PATH) -> Flask:
     """Load weights at startup and return the patient search app."""
 
-    data_dir: str = get_path("cleaned", require_exists=True)
+    data_dir: str = get_path(path_type="cleaned", require_exists=True)
 
-    print("Loading model weights...", flush=True)
-    model, tokenizer = load_model(model_path)
-    print("Loading concept names...", flush=True)
-    concept_names = load_concept_names(data_dir)
-    print("Model loaded; starting patient search server.", flush=True)
+    print("\n === Loading model weights ===\n", flush=True)
+    model, tokenizer = load_model(model_path=model_path)
+
+    print("\n === Loading concept names ===\n", flush=True)
+    concept_names: dict[int, str] = load_concept_names(data_dir=data_dir)
+
+    print("\n === Model loaded; starting patient search server ===\n", flush=True)
     generation_lock = threading.Lock()
+
     app = Flask(__name__)
 
     @app.get("/random-person")
-    def random_person():
+    def random_person() -> Response | tuple[Response, int]:
+        """ Select a random person ID and return it. """
         try:
-            person_ids = load_person_ids(data_dir)
+            person_ids: tuple[int, ...] = load_person_ids(data_dir=data_dir)
+
         except (FileNotFoundError, KeyError, OSError) as exc:
             app.logger.error("Could not load person IDs: %s", exc)
             return jsonify(error="PERSON data is unavailable"), 503
+
         if not person_ids:
             return jsonify(error="PERSON data contains no patient IDs"), 503
-        return jsonify(person_id=str(secrets.choice(person_ids)))
+
+        return jsonify({"person_id" : str(secrets.choice(person_ids))})
 
     @app.post("/patient-search")
-    def patient_search():
+    def patient_search() -> Response | tuple[Response, int]:
         """ Trigger the model to run patient search. """
 
         # --- Get Payload; Expecting a Dict ---
@@ -70,16 +79,20 @@ def create_app(model_path: str = LLAMA_PATH) -> Flask:
         try:
             # Only one at a time
             with generation_lock:
-                answer, evidence = search_patient(person_id=person_id, 
-                                                  request=request, 
-                                                  data_dir=data_dir, 
-                                                  model=model, 
-                                                  tokenizer=tokenizer)
+                result = run_patient_request(person_id=person_id,
+                                             request=request,
+                                             data_dir=data_dir,
+                                             model=model,
+                                             tokenizer=tokenizer,
+                                             concept_names=concept_names)
 
         except ValueError as exc:
             return jsonify(error=str(exc)), 404 if "was not found" in str(exc) else 400
+        except FileNotFoundError as exc:
+            app.logger.error("Search data is missing: %s", exc)
+            return jsonify(error=str(exc)), 503
 
-        return jsonify(answer=answer, evidence=add_concept_names(evidence, concept_names))
+        return jsonify(result)
 
     return app
 

@@ -186,6 +186,8 @@ def job_stdout_path(gateway: paramiko.Transport, job_id: str, repo_dir: str) -> 
 def ensure_server_job(
     gateway: paramiko.Transport, username: str, repo_dir: str,
     on_status: Callable[[str, str], None] | None = None,
+    on_job_id: Callable[[str], None] | None = None,
+    is_stopped: Callable[[], bool] | None = None,
 ) -> tuple[str, str, str]:
     """Reuse or submit the Slurm job, then wait for its compute node."""
     jobs = server_jobs(gateway, username)
@@ -197,6 +199,8 @@ def ensure_server_job(
         if on_status:
             on_status("booting", f"Using server job {job_id}.")
     else:
+        if is_stopped and is_stopped():
+            raise RuntimeError("Server startup was cancelled")
         if on_status:
             on_status("not_running", "No server job is running on HiPerGator.")
         script = posixpath.join(repo_dir, "slurm", "run_server.slurm")
@@ -212,6 +216,9 @@ def ensure_server_job(
             raise RuntimeError(f"Unexpected sbatch response: {output.strip()}")
         print(f"Submitted server job {job_id}", flush=True)
 
+    if on_job_id:
+        on_job_id(job_id)
+
     log_path = job_stdout_path(gateway, job_id, repo_dir)
     sftp = paramiko.SFTPClient.from_transport(gateway)
     try:
@@ -221,6 +228,8 @@ def ensure_server_job(
         submitted_at = time.monotonic()
         last_report = 0.0
         while time.monotonic() < deadline:
+            if is_stopped and is_stopped():
+                raise RuntimeError("Server startup was cancelled")
             matches = [job for job in server_jobs(gateway, username) if job[0] == job_id]
             offset, _ = show_server_log(sftp, log_path, offset)
             if not matches:
@@ -249,7 +258,7 @@ def wait_for_model_server(
     server_host: str, log_path: str,
     on_status: Callable[[str, str], None] | None = None,
 ) -> None:
-    """Wait until the model has loaded and the HTTP port accepts connections."""
+    """Wait until the model server accepts connections on its HTTP port."""
     sftp = paramiko.SFTPClient.from_transport(gateway)
     try:
         offset = 0
@@ -270,17 +279,16 @@ def wait_for_model_server(
                 model_loaded = True
                 if on_status:
                     on_status("booting", "Model loaded; waiting for the server port.")
-            if model_loaded:
-                try:
-                    probe = gateway.open_channel(
-                        "direct-tcpip", (server_host, SERVER_PORT), ("127.0.0.1", 0), timeout=5
-                    )
-                    if probe is not None:
-                        probe.close()
-                        print("Model server is ready.", flush=True)
-                        return
-                except (OSError, paramiko.SSHException):
-                    pass
+            try:
+                probe = gateway.open_channel(
+                    "direct-tcpip", (server_host, SERVER_PORT), ("127.0.0.1", 0), timeout=5
+                )
+                if probe is not None:
+                    probe.close()
+                    print("Model server is ready.", flush=True)
+                    return
+            except (OSError, paramiko.SSHException):
+                pass
             if not any(job[0] == job_id for job in server_jobs(gateway, username)):
                 raise RuntimeError(f"Server job {job_id} stopped before the model server was ready")
             if time.monotonic() - last_report >= 30:

@@ -197,6 +197,13 @@
           font-weight: 700;
         }
 
+        .field-help {
+          margin: 0 0 8px;
+          color: #748b82;
+          font-size: 12px;
+          line-height: 1.5;
+        }
+
         .field-control {
           box-sizing: border-box;
           width: 100%;
@@ -266,11 +273,111 @@
     &.result {
       margin-top: 22px;
 
+      .decision-trace {
+        margin-bottom: 20px;
+        padding: 14px 18px;
+        border: 1px solid #e3eae6;
+        border-radius: 10px;
+        background: #f7faf8;
+
+        summary {
+          color: #246e58;
+          font-weight: 700;
+          cursor: pointer;
+        }
+
+        ol {
+          margin: 12px 0 0;
+          padding-left: 22px;
+        }
+
+        li {
+          margin-top: 9px;
+          color: #526b62;
+          line-height: 1.5;
+          overflow-wrap: anywhere;
+        }
+
+        li strong {
+          display: block;
+          color: #23433d;
+        }
+      }
+
       .answer {
         margin: 0 0 26px;
         color: #23433d;
         white-space: pre-wrap;
         line-height: 1.7;
+      }
+
+      .analysis-results {
+        margin-bottom: 24px;
+
+        .analysis-context, .analysis-empty {
+          color: #667d77;
+          font-size: 13px;
+        }
+
+        .analysis-series {
+          margin-top: 16px;
+          padding: 18px;
+          border: 1px solid #e3eae6;
+          border-radius: 10px;
+
+          h3 {
+            margin: 0;
+            font-size: 15px;
+
+            span {
+              color: #71877e;
+              font-size: 12px;
+              font-weight: 400;
+            }
+          }
+
+          p {
+            color: #667d77;
+            font-size: 12px;
+          }
+        }
+
+        .analysis-chart {
+          display: block;
+          width: 100%;
+          height: auto;
+          overflow: visible;
+
+          .chart-axis { stroke: #8ca99b; stroke-width: 1; }
+          .chart-label { fill: #667d77; font-size: 11px; }
+          .chart-line { fill: none; stroke: #24745e; stroke-width: 2; }
+          .chart-point, .chart-bar { fill: #24745e; }
+        }
+
+        .analysis-stats {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+          gap: 10px;
+          margin: 14px 0 0;
+
+          div {
+            padding: 10px;
+            border-radius: 8px;
+            background: #f1f5f3;
+          }
+
+          dt {
+            color: #667d77;
+            font-size: 11px;
+            text-transform: capitalize;
+          }
+
+          dd {
+            margin: 4px 0 0;
+            font-size: 14px;
+            font-weight: 700;
+          }
+        }
       }
 
       .evidence {
@@ -281,6 +388,16 @@
           color: #246e58;
           font-weight: 700;
           cursor: pointer;
+        }
+
+        .evidence-date-note {
+          margin: 14px 0 0;
+          padding: 10px 12px;
+          border-radius: 8px;
+          background: #f1f5f3;
+          color: #5d756b;
+          font-size: 12px;
+          line-height: 1.5;
         }
 
         .evidence-table {

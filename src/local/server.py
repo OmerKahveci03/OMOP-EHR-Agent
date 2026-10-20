@@ -113,4 +113,4 @@ if __name__ == "__main__":
             threaded=True,
         )
     finally:
-        tunnel.stop()
+        tunnel.stop(cancel_job=True)

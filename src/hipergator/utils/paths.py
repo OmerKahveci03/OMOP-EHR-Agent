@@ -1,10 +1,8 @@
 import os
 
-from typing import Literal
-
 from .. import HPG_BASE_DIR
+from .types import PathType
 
-PathType = Literal["raw", "cleaned", "metadata"]
 
 def get_path(path_type: PathType, base_dir: str = HPG_BASE_DIR, 
              makedir: bool = False, require_exists: bool = False) -> str:
@@ -20,12 +18,14 @@ def get_path(path_type: PathType, base_dir: str = HPG_BASE_DIR,
         path: str = os.path.join(base_dir, "physionet.org", "files", 
                                  "mimic-iv-demo-omop", "0.9", "1_omop_data_csv")
 
-    elif path_type in ["cleaned", "metadata"]:
-        # -- Metadata Sits Inside Cleaned Dir --
+    elif path_type in ("cleaned", "metadata", "summary"):
+        # -- Metadata and summaries sit inside the cleaned directory --
         cleaned_dir: str = os.path.join(base_dir, "cleaned_data")
 
         if path_type == "metadata":
             path = os.path.join(cleaned_dir, "metadata")
+        elif path_type == "summary":
+            path = os.path.join(cleaned_dir, "summary")
         else:
             path = cleaned_dir
 
