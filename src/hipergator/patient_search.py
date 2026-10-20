@@ -115,7 +115,9 @@ def select_action_plan(model: PreTrainedModel,
             "when the requested calculation needs either. Choose concept_ids only from "
             "the supplied patient-specific candidates. Use [] only when the user "
             "explicitly asks about all measurements; for a named measurement "
-            "with no matching candidate choose unsupported. "
+            "with no matching candidate choose unsupported. Select at most eight "
+            "concept IDs and write them as JSON integers, not strings. Never copy "
+            "the entire candidate list. "
             "Scope means time only: use exactly latest_encounter or history, never "
             "patient or person. Choose latest_encounter unless the question asks for history, earlier "
             "encounters, or a comparison across encounters. Use history for a list "
@@ -152,16 +154,28 @@ def select_action_plan(model: PreTrainedModel,
     ):
         raise ValueError(f"Unavailable tables in action plan: {tables}")
     candidate_ids = {item["concept_id"] for item in candidates}
-    if not isinstance(concept_ids, list) or any(
-        isinstance(concept_id, bool) or not isinstance(concept_id, int)
-        or concept_id not in candidate_ids for concept_id in concept_ids
-    ):
-        raise ValueError(f"Unavailable measurement concepts: {concept_ids}")
+    if not isinstance(concept_ids, list):
+        concept_ids = []
+    parsed_ids: list[int] = []
+    for concept_id in concept_ids:
+        if isinstance(concept_id, bool) or not (
+            isinstance(concept_id, int) or
+            isinstance(concept_id, str) and re.fullmatch(r"-?\d+", concept_id.strip())
+        ):
+            return {"action": "unsupported", "reason": "Could not identify the requested measurement concepts."}
+        parsed_id = int(concept_id)
+        if parsed_id not in candidate_ids:
+            return {"action": "unsupported", "reason": "Could not identify the requested measurement concepts."}
+        parsed_ids.append(parsed_id)
+    parsed_ids = list(dict.fromkeys(parsed_ids))
+    if len(parsed_ids) > 8:
+        return {"action": "unsupported", "reason":
+                "Could not narrow this request to a small set of measurement concepts."}
     if action in ANALYSIS_KINDS and "measurement" not in available:
         raise ValueError("Measurement table is unavailable")
     return {"action": action, "scope": scope,
             "tables": list(dict.fromkeys(tables)),
-            "concept_ids": list(dict.fromkeys(concept_ids))}
+            "concept_ids": parsed_ids}
 
 
 def patient_rows(data_dir: str, table: str, 
@@ -349,7 +363,7 @@ def run_patient_request(person_id: int, request: str, data_dir: str,
     action = plan["action"]
     if action == "unsupported":
         return {"kind": "unsupported", "answer":
-                "This request needs a calculation that the available analysis tools do not support.",
+                plan.get("reason", "This request needs a calculation that the available analysis tools do not support."),
                 "evidence": [], "analysis": None}
     if action == "records":
         selected = [table for table in plan["tables"] if table not in ("person", "visit_occurrence")]

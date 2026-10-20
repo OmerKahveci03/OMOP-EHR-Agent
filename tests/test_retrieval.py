@@ -106,9 +106,27 @@ class RetrievalTests(unittest.TestCase):
             '{"action":"time_series","scope":"history","tables":["measurement"],'
             '"concept_ids":[999]}'
         )):
-            with self.assertRaisesRegex(ValueError, "Unavailable measurement concepts"):
-                select_action_plan(model, Tokenizer(), "trend", ["measurement"],
-                                   [{"concept_id": 300, "name": "Example"}])
+            plan = select_action_plan(model, Tokenizer(), "trend", ["measurement"],
+                                      [{"concept_id": 300, "name": "Example"}])
+        self.assertEqual(plan["action"], "unsupported")
+
+    def test_action_plan_accepts_integer_strings_but_not_entire_catalog(self):
+        model = SimpleNamespace()
+        candidates = [{"concept_id": concept_id, "name": str(concept_id)}
+                      for concept_id in range(300, 310)]
+        with patch("src.hipergator.patient_search.generate", return_value=(
+            '{"action":"statistics","scope":"history",'
+            '"tables":["measurement"],"concept_ids":["300","301"]}'
+        )):
+            plan = select_action_plan(model, Tokenizer(), "statistics", ["measurement"], candidates)
+        self.assertEqual(plan["concept_ids"], [300, 301])
+        with patch("src.hipergator.patient_search.generate", return_value=(
+            '{"action":"statistics","scope":"history",'
+            '"tables":["measurement"],"concept_ids":'
+            '["300","301","302","303","304","305","306","307","308","309"]}'
+        )):
+            plan = select_action_plan(model, Tokenizer(), "statistics", ["measurement"], candidates)
+        self.assertEqual(plan["action"], "unsupported")
 
     def test_action_plan_handles_patient_as_time_scope(self):
         model = SimpleNamespace()
