@@ -99,6 +99,51 @@ def select_retrieval_plan(model: PreTrainedModel,
     return list(dict.fromkeys(names))[:5], cast(ScopeType, scope)
 
 
+def select_route_plan(model: PreTrainedModel,
+                      tokenizer: PreTrainedTokenizerBase,
+                      request: str, available: list[str]) -> dict:
+    """Choose the operation and tables before loading measurement candidates."""
+    response = generate(
+        model=model, tokenizer=tokenizer,
+        system=(
+            "You navigate one patient's OMOP data. Return only JSON with keys "
+            "action, scope, tables. Actions: records, time_series, distribution, "
+            "statistics, unsupported. Use records to show source rows; use an "
+            "analysis action for numeric measurement summaries. Choose unsupported "
+            "for calculations requiring derived rates or unit conversions. Scope "
+            "must be latest_encounter or history. A request for visits or encounters "
+            "in plural needs history, even if sorted most recent first. Choose at "
+            "most five tables from the available list. Analysis actions require "
+            "measurement. Do not select measurement for unrelated questions."
+        ),
+        user=f"Available tables: {json.dumps(available)}\nQuestion: {request}",
+        max_new_tokens=128,
+    )
+    match = re.search(r"\{[\s\S]*\}", response)
+    if not match:
+        raise ValueError(f"Model did not return a route plan: {response}")
+    plan = json.loads(match.group())
+    action = plan.get("action")
+    if action not in ("records", *ANALYSIS_KINDS, "unsupported"):
+        raise ValueError(f"Unsupported action: {action}")
+    if action == "unsupported":
+        return {"action": action, "scope": "latest_encounter", "tables": []}
+    tables = plan.get("tables")
+    if not isinstance(tables, list) or len(tables) > 5 or any(
+        not isinstance(table, str) or table not in available for table in tables
+    ):
+        raise ValueError(f"Unavailable tables in route plan: {tables}")
+    scope = plan.get("scope")
+    if re.search(r"\b(visits|encounters|history|earlier|previous)\b", request, re.I):
+        scope = "history"
+    elif scope not in SCOPE_VALUES:
+        scope = "latest_encounter"
+    if action in ANALYSIS_KINDS and "measurement" not in tables:
+        raise ValueError("Analysis action requires the measurement table")
+    return {"action": action, "scope": scope,
+            "tables": list(dict.fromkeys(tables))}
+
+
 def select_action_plan(model: PreTrainedModel,
                        tokenizer: PreTrainedTokenizerBase,
                        request: str, available: list[str],
@@ -395,38 +440,43 @@ def run_patient_request(person_id: int, request: str, data_dir: str,
         raise ValueError(f"person_id {person_id} was not found in PERSON")
     available = [table for table in CLINICAL_TABLES
                  if os.path.isfile(os.path.join(data_dir, f"{table}.parquet"))]
-    measurement_rows = (
-        patient_table(data_dir, "measurement", person_id, "history", None)
-        if "measurement" in available else pd.DataFrame()
-    )
-    candidates = measurement_catalog(measurement_rows, concept_names, request)
-    ancestor_candidates = (
-        measurement_ancestor_catalog(
-            measurement_rows, concept_names, load_measurement_ancestors(data_dir), request)
-        if "measurement" in available else []
-    )
-    plan = select_action_plan(model, tokenizer, request, available, candidates,
-                              ancestor_candidates)
-    action = plan["action"]
-    trace = [{"stage": "Candidates", "detail":
-              f"Found {len(candidates)} patient measurement concepts and "
-              f"{len(ancestor_candidates)} matching ancestor groups."},
-             {"stage": "Model plan", "detail":
-              f"Action: {action}; scope: {plan.get('scope', 'not selected')}; "
-              f"tables: {', '.join(plan.get('tables', [])) or 'none'}; "
-              f"concepts: {', '.join(f'{concept_id} ({concept_names.get(concept_id, "unknown")})' for concept_id in plan.get('concept_ids', [])) or 'none'}; "
-              f"ancestors: {', '.join(f'{ancestor_id} ({concept_names.get(ancestor_id, "unknown")})' for ancestor_id in plan.get('ancestor_ids', [])) or 'none'}."}]
+    route = select_route_plan(model, tokenizer, request, available)
+    trace = [{"stage": "Model route", "detail":
+              f"Action: {route['action']}; scope: {route['scope']}; "
+              f"tables: {', '.join(route['tables']) or 'none'}."}]
     if requires_derived_calculation(request):
         reason = ("This request needs a derived calculation that the available "
                   "measurement tools do not support. No rate or other value was estimated.")
         trace.append({"stage": "Validation", "detail": reason})
         return {"kind": "unsupported", "answer": reason,
                 "evidence": [], "analysis": None, "decision_trace": trace}
-    if action == "unsupported":
-        reason = plan.get("reason", "The requested operation is not supported by the available analysis tools.")
+    if route["action"] == "unsupported":
+        reason = "The requested operation is not supported by the available analysis tools."
         trace.append({"stage": "Validation", "detail": reason})
         return {"kind": "unsupported", "answer": reason,
                 "evidence": [], "analysis": None, "decision_trace": trace}
+    plan = {**route, "concept_ids": [], "ancestor_ids": []}
+    if "measurement" in route["tables"]:
+        measurement_rows = patient_table(data_dir, "measurement", person_id, "history", None)
+        candidates = measurement_catalog(measurement_rows, concept_names, request)
+        ancestor_candidates = measurement_ancestor_catalog(
+            measurement_rows, concept_names, load_measurement_ancestors(data_dir), request)
+        trace.append({"stage": "Candidates", "detail":
+                      f"Found {len(candidates)} patient measurement concepts and "
+                      f"{len(ancestor_candidates)} matching ancestor groups."})
+        selection = select_action_plan(model, tokenizer, request, route["tables"],
+                                       candidates, ancestor_candidates)
+        if selection["action"] == "unsupported":
+            reason = selection.get("reason", "Could not select the requested measurements.")
+            trace.append({"stage": "Validation", "detail": reason})
+            return {"kind": "unsupported", "answer": reason,
+                    "evidence": [], "analysis": None, "decision_trace": trace}
+        plan["concept_ids"] = selection["concept_ids"]
+        plan["ancestor_ids"] = selection["ancestor_ids"]
+        trace.append({"stage": "Model concept selection", "detail":
+                      f"Concepts: {', '.join(f'{concept_id} ({concept_names.get(concept_id, "unknown")})' for concept_id in plan['concept_ids']) or 'none'}; "
+                      f"ancestors: {', '.join(f'{ancestor_id} ({concept_names.get(ancestor_id, "unknown")})' for ancestor_id in plan['ancestor_ids']) or 'none'}."})
+    action = plan["action"]
     trace.append({"stage": "Validation", "detail": "Selected patient data and operation passed validation."})
     if action == "records":
         selected = [table for table in plan["tables"] if table not in ("person", "visit_occurrence")]
