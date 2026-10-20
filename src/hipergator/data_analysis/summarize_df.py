@@ -1,0 +1,292 @@
+"""
+The goal of this module is to run simple descriptive statistics on the available dataset.
+"""
+
+import os
+
+import pandas as pd
+
+from typing import Iterable, Literal, Optional
+
+from .summarize_column import (
+    ColumnType,
+    _COLUMN_TYPES,
+    classify_column,
+    summarize_binary,
+    summarize_categorical,
+    summarize_dates,
+    summarize_ids,
+    summarize_numerical,
+)
+
+
+DatasetSummary = dict[str, pd.DataFrame]
+DF_SUMMARY_NAMES: tuple[str, ...] = (
+    "dataset", "columns", "binary", "categorical", "date", "id", "numerical"
+)
+
+
+def read_df_summary(path: str) -> DatasetSummary:
+    """Read and validate a dataset summary workbook."""
+
+    summaries: dict[str, pd.DataFrame] = pd.read_excel(path, sheet_name=None, engine="openpyxl")
+    missing_sheets: list[str] = sorted(set(DF_SUMMARY_NAMES) - set(summaries))
+    if missing_sheets:
+        raise KeyError(f"Dataset summary workbook is missing sheets: {missing_sheets}")
+    return {summary_name: summaries[summary_name] for summary_name in DF_SUMMARY_NAMES}
+
+
+def write_df_summary(summary: DatasetSummary, path: str) -> str:
+    """Write the provided summary tables to an Excel workbook and return its path."""
+
+    if not summary:
+        raise ValueError("At least one summary table is required")
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with pd.ExcelWriter(path, engine="openpyxl") as writer:
+        ordered_summary_names: list[str] = [
+            *[name for name in DF_SUMMARY_NAMES if name in summary],
+            *sorted(set(summary) - set(DF_SUMMARY_NAMES)),
+        ]
+        for summary_name in ordered_summary_names:
+            summary[summary_name].to_excel(writer, sheet_name=summary_name, index=False)
+    return path
+
+def classify_df(
+    df: pd.DataFrame,
+    configured_col_types: Optional[dict[ColumnType, Iterable[str]]] = None,
+) -> dict[str, ColumnType]:
+    """
+    Classify every DataFrame column, honoring caller-configured type overrides.
+
+    Caller-configured types take precedence over inferred types. Every column not
+    included in ``configured_col_types`` is classified from its name, dtype, and
+    observed values with :func:`classify_column`.
+
+    Parameters
+    ----------
+    df: pd.DataFrame
+        Data whose columns will be classified and summarized. Column names must be
+        strings.
+    configured_col_types: Optional[dict[ColumnType, Iterable[str]]] (default None)
+        Optional mapping from a column type to columns that must use that type. For
+        example, ``{"id": ["person_key"], "categorical": ["numeric_code"]}``
+        prevents those columns from being inferred incorrectly. A column may be
+        configured under only one type, and every configured column must exist in
+        ``df``.
+
+    Returns
+    -------
+    column_types: dict[str, ColumnType]
+        Mapping from every DataFrame column to its configured or inferred type.
+
+    Raises
+    ------
+    KeyError
+        If a configured column does not exist in ``df``.
+    TypeError
+        If a DataFrame column name is not a string.
+    ValueError
+        If an unsupported type is configured or a column is configured under more
+        than one type.
+    """
+
+    # --- Columns must be strings ---
+    non_string_columns: list[object] = [column for column in df.columns if not isinstance(column, str)]
+    if non_string_columns:
+        raise TypeError(f"All DataFrame column names must be strings; invalid columns: {non_string_columns}")
+    column_names: list[str] = [column for column in df.columns if isinstance(column, str)]
+
+    # --- Build column to type mapping ---
+    configured_types_by_column: dict[str, ColumnType] = {}
+    if configured_col_types is not None:
+        for column_type, columns in configured_col_types.items():
+            if column_type not in _COLUMN_TYPES:
+                raise ValueError(f"Unsupported configured column type: {column_type}")
+            for column in columns:
+                if column not in df.columns:
+                    raise KeyError(f"Configured column is missing from the DataFrame: {column}")
+                if column in configured_types_by_column:
+                    previous_type: ColumnType = configured_types_by_column[column]
+                    raise ValueError(f"Column '{column}' is configured as both '{previous_type}' and '{column_type}'")
+                configured_types_by_column[column] = column_type
+
+    return {
+        column: configured_types_by_column[column] if column in configured_types_by_column else classify_column(column=column, values=df[column])
+        for column in column_names
+    }
+
+
+def summarize_df(
+    df: pd.DataFrame,
+    configured_col_types: Optional[dict[ColumnType, Iterable[str]]] = None,
+    group_by: str | list[str] | None = None,
+    group_types: list[ColumnType] | Literal["all"] = "all",
+    max_groups: int | None = None,
+) -> dict[str, pd.DataFrame]:
+    """
+    Classify every DataFrame column and run each type-specific summarizer.
+
+    Caller-configured types take precedence over inferred types. Columns not listed
+    in ``configured_col_types`` are classified by :func:`classify_df`.
+
+    Parameters
+    ----------
+    df: pd.DataFrame
+        Data whose columns will be classified and summarized.
+    configured_col_types: Optional[dict[ColumnType, Iterable[str]]] (default None)
+        Optional mapping from a column type to columns that must use that type.
+    group_by: str | list[str] | None (default None)
+        One column or a list of columns used to calculate separate summaries.
+        Missing values form groups. For multiple columns, ``group`` contains a tuple
+        of values in the order supplied.
+    group_types: list[ColumnType] | Literal["all"] (default "all")
+        Column types to summarize by group when ``group_by`` is supplied. Other types
+        receive one summary for the full DataFrame.
+    max_groups: int | None (default None)
+        Keep only the most frequent groups. Counts are calculated from all rows.
+
+    Returns
+    -------
+    summaries: dict[str, pd.DataFrame]
+        Mapping containing one summary DataFrame for each supported column type.
+        Also contains dataset and columns summaries.
+
+    """
+
+    column_types: dict[str, ColumnType] = classify_df(df=df, configured_col_types=configured_col_types)
+    columns_by_type: dict[ColumnType, list[str]] = {
+        column_type: [column for column, assigned_type in column_types.items() if assigned_type == column_type]
+        for column_type in _COLUMN_TYPES
+    }
+
+    by_columns = [group_by] if isinstance(group_by, str) else group_by
+    if max_groups is not None and max_groups < 1:
+        raise ValueError("max_groups must be positive")
+    if group_types != "all":
+        if not isinstance(group_types, list) or any(column_type not in _COLUMN_TYPES for column_type in group_types):
+            raise ValueError(f"group_types must be 'all' or a list of supported column types: {group_types}")
+    grouped_types = set(_COLUMN_TYPES if group_types == "all" else group_types)
+    if by_columns is not None:
+        if not by_columns:
+            raise ValueError("group_by must contain at least one column")
+        missing_group_columns = [column for column in by_columns if column not in df.columns]
+        if missing_group_columns:
+            raise KeyError(f"Grouping columns are missing from the DataFrame: {missing_group_columns}")
+
+    total_group_count: int | None = None
+    if by_columns is None:
+        groups = [(None, df)]
+    else:
+        grouped = df.groupby(by_columns, dropna=False, sort=False, observed=True)
+        if max_groups is None:
+            groups = grouped
+        else:
+            group_sizes = grouped.size()
+            total_group_count = len(group_sizes)
+            top_groups = group_sizes.nlargest(max_groups)
+            groups = [
+                (key if isinstance(key, tuple) else (key,),
+                 grouped.get_group(key if isinstance(key, tuple) else (key,)))
+                for key in top_groups.index
+            ]
+    grouped_summaries: dict[str, list[pd.DataFrame]] = {}
+    for group, group_df in groups:
+        summaries: dict[str, pd.DataFrame] = {
+            "dataset": pd.DataFrame([{"row_count": len(group_df), "column_count": len(df.columns)}]),
+        }
+        if by_columns is None or "binary" in grouped_types:
+            summaries["binary"] = summarize_binary(df=group_df, columns=columns_by_type["binary"])
+        if by_columns is None or "categorical" in grouped_types:
+            summaries["categorical"] = summarize_categorical(df=group_df, columns=columns_by_type["categorical"])
+        if by_columns is None or "date" in grouped_types:
+            summaries["date"] = summarize_dates(df=group_df, columns=columns_by_type["date"])
+        if by_columns is None or "id" in grouped_types:
+            summaries["id"] = summarize_ids(df=group_df, columns=columns_by_type["id"])
+        if by_columns is None or "numerical" in grouped_types:
+            summaries["numerical"] = summarize_numerical(df=group_df, columns=columns_by_type["numerical"])
+
+        for name, summary in summaries.items():
+            if by_columns is not None and name in _COLUMN_TYPES and name not in grouped_types:
+                continue
+            if by_columns is not None and name != "columns":
+                group_value = group[0] if len(by_columns) == 1 else tuple(
+                    value.item() if hasattr(value, "item") else value for value in group
+                )
+                summary.insert(0, "group", [group_value] * len(summary))
+            grouped_summaries.setdefault(name, []).append(summary)
+
+
+    grouped_summaries["columns"] = [summarize_columns(df=df, column_types=column_types)]
+
+    if by_columns is not None:
+        whole_summaries = summarize_df(df=df, configured_col_types=configured_col_types)
+        for column_type in _COLUMN_TYPES:
+            if column_type not in grouped_types:
+                grouped_summaries[column_type] = [whole_summaries[column_type]]
+        if df.empty:
+            for column_type in grouped_types:
+                if column_type not in grouped_summaries:
+                    empty_summary = whole_summaries[column_type].iloc[0:0].copy()
+                    empty_summary.insert(0, "group", pd.Series(dtype="object"))
+                    grouped_summaries[column_type] = [empty_summary]
+
+            grouped_summaries["dataset"] = [pd.DataFrame(columns=["group", "row_count", "column_count"])]
+
+    if total_group_count is not None:
+        for dataset_summary in grouped_summaries["dataset"]:
+            dataset_summary["total_groups"] = total_group_count
+            dataset_summary["included_groups"] = min(total_group_count, max_groups)
+
+    if grouped_summaries:
+        return {name: pd.concat(frames, ignore_index=True) for name, frames in grouped_summaries.items()}
+    # An empty grouped input has no observed groups, but retains the expected tables.
+    empty_summaries = summarize_df(df=df, configured_col_types=configured_col_types)
+    for name, summary in empty_summaries.items():
+        if name in _COLUMN_TYPES and name not in grouped_types:
+            continue
+        if name != "columns":
+            summary.insert(0, "group", pd.Series(dtype="object"))
+        summary.drop(index=summary.index, inplace=True)
+    return empty_summaries
+
+
+def summarize_columns(
+    df: pd.DataFrame,
+    column_types: dict[str, ColumnType],
+    example_count: int = 3,
+) -> pd.DataFrame:
+    """
+    Describe each DataFrame column with its assigned type and provide example values.
+
+    Parameters
+    ----------
+    df: pd.DataFrame
+        Data containing every column in ``column_types``.
+    column_types: dict[str, ColumnType]
+        Assigned type for each column to include, in the desired output order.
+    example_count: int (default 3)
+        Maximum number of distinct, non-missing string examples to retain.
+
+    Returns
+    -------
+    column_summary: pd.DataFrame
+        One row per column with ``column``, ``column_type``, and numbered example
+        columns from ``example_1`` through ``example_N``.
+    """
+
+    if example_count < 0:
+        raise ValueError(f"example_count must be non-negative, but received {example_count}")
+    missing_columns: list[str] = [column for column in column_types if column not in df.columns]
+    if missing_columns:
+        raise KeyError(f"Columns are missing from the DataFrame: {missing_columns}")
+
+    output_columns: list[str] = ["column", "column_type", *[f"example_{i + 1}" for i in range(example_count)]]
+    records: list[dict[str, object]] = []
+    for column, column_type in column_types.items():
+        # --- Include n unique example values ---
+        examples: list[object] = df[column].dropna().astype("string").drop_duplicates().head(example_count).tolist()
+        record: dict[str, object] = {"column": column, "column_type": column_type}
+        for i, example in enumerate(examples):
+            record[f"example_{i + 1}"] = example
+        records.append(record)
+    return pd.DataFrame(records, columns=output_columns)

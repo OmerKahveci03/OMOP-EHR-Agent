@@ -7,7 +7,7 @@ import pandas as pd
 
 def load_concept_names(data_dir: str) -> dict[int, str]:
     """Load only the ID and name columns from the cleaned concept table."""
-    path: str = os.path.join(data_dir, "2b_concept.parquet")
+    path: str = os.path.join(data_dir, "concept.parquet")
     concepts: pd.DataFrame = pd.read_parquet(path, columns=["concept_id", "concept_name"])
     return {
         int(concept_id): str(name)
