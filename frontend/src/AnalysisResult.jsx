@@ -4,6 +4,7 @@ import {
   CartesianGrid,
   Line,
   LineChart,
+  LabelList,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -12,6 +13,11 @@ import {
 
 function formatNumber(value) {
   return value == null ? '—' : Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 })
+}
+
+function formatBinBound(value, width) {
+  const decimals = width > 0 ? Math.min(8, Math.max(0, 1 - Math.floor(Math.log10(width)))) : 2
+  return Number(value).toLocaleString(undefined, { maximumFractionDigits: decimals })
 }
 
 function valueAxisLabel(label, unit) {
@@ -41,9 +47,10 @@ function BinTooltip({ active, payload, unit, lastEnd }) {
   if (!active || !payload?.length) return null
   const bin = payload[0].payload
   const endBracket = bin.end === lastEnd ? ']' : ')'
+  const width = bin.end - bin.start
   return (
     <div className="analysis-tooltip">
-      <strong>{`[${formatNumber(bin.start)}, ${formatNumber(bin.end)}${endBracket} ${unit === 'Unspecified' ? '' : unit}`}</strong>
+      <strong>{`[${formatBinBound(bin.start, width)}, ${formatBinBound(bin.end, width)}${endBracket} ${unit === 'Unspecified' ? '' : unit}`}</strong>
       <span>{formatNumber(bin.count)} measurements</span>
     </div>
   )
@@ -81,27 +88,41 @@ function TimeSeriesChart({ points, label, unit }) {
   )
 }
 
-function DistributionChart({ bins, label, unit }) {
+function DistributionChart({ bins, stats, label, unit }) {
   if (!bins.length) return <p className="analysis-empty">No numeric values to plot.</p>
-  const data = bins.map((bin) => ({ ...bin, midpoint: (bin.start + bin.end) / 2 }))
+  const data = bins.map((bin) => ({
+    ...bin,
+    range: `${formatBinBound(bin.start, bin.end - bin.start)}–${formatBinBound(bin.end, bin.end - bin.start)}`,
+  }))
+  const mostCommon = data.reduce((best, bin) => bin.count > best.count ? bin : best, data[0])
 
   return (
     <>
+      {stats?.count > 0 && (
+        <dl className="analysis-highlights">
+          <div><dt>Median</dt><dd>{formatNumber(stats.median)} {unit}</dd></div>
+          <div><dt>Mean</dt><dd>{formatNumber(stats.mean)} {unit}</dd></div>
+          <div><dt>Middle 50% (Q1–Q3)</dt><dd>{formatNumber(stats.q1)}–{formatNumber(stats.q3)} {unit}</dd></div>
+          <div><dt>Minimum–maximum</dt><dd>{formatNumber(stats.min)}–{formatNumber(stats.max)} {unit}</dd></div>
+        </dl>
+      )}
       <div className="analysis-chart" role="img" aria-label={`Distribution of ${label}: measurement count by ${unit} value range`}>
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data} margin={{ top: 12, right: 18, bottom: 18, left: 18 }} barCategoryGap="2%" accessibilityLayer>
+          <BarChart data={data} margin={{ top: 20, right: 18, bottom: 0, left: 18 }} barCategoryGap="24%" accessibilityLayer>
             <CartesianGrid stroke="#e3eae6" strokeDasharray="3 3" vertical={false} />
-            <XAxis dataKey="midpoint" tickFormatter={formatNumber} minTickGap={12}
-              tick={{ fill: '#667d77', fontSize: 11 }} height={55}
-              label={{ value: valueAxisLabel(label, unit), position: 'insideBottom', offset: -12, fill: '#526b62', fontSize: 12 }} />
+            <XAxis dataKey="range" tick={{ fill: '#667d77', fontSize: 11 }} height={28} minTickGap={8} />
             <YAxis allowDecimals={false} domain={[0, 'auto']} tick={{ fill: '#667d77', fontSize: 11 }} width={62}
               label={{ value: 'Number of measurements', angle: -90, position: 'insideLeft', fill: '#526b62', fontSize: 12 }} />
             <Tooltip content={<BinTooltip unit={unit} lastEnd={data.at(-1).end} />} />
-            <Bar dataKey="count" fill="#24745e" isAnimationActive={false} />
+            <Bar dataKey="count" fill="#24745e" maxBarSize={86} isAnimationActive={false}>
+              <LabelList dataKey="count" position="top" formatter={(count) => count || ''} fill="#526b62" fontSize={11} />
+            </Bar>
           </BarChart>
         </ResponsiveContainer>
       </div>
-      <p className="analysis-chart-note">Each bar counts measurements in a value range; the x-axis shows the range midpoint. Hover for exact bounds.</p>
+      <p className="analysis-axis-title">{valueAxisLabel(label, unit)} ranges</p>
+      <p className="analysis-chart-note">Highest-count range: {mostCommon.range} {unit} ({mostCommon.count} of {stats?.count ?? data.reduce((count, bin) => count + bin.count, 0)} measurements).</p>
+      <p className="analysis-chart-note">Each bar counts measurements in its labeled range. Hover for the precise bounds; each upper bound is excluded except the last.</p>
     </>
   )
 }
@@ -117,7 +138,7 @@ export default function AnalysisResult({ analysis }) {
           <h3>{series.label} <span>({series.concept_id})</span></h3>
           <p>{series.numeric_count} numeric values · {series.excluded_count} excluded · Unit: {series.unit}</p>
           {analysis.kind === 'time_series' && <TimeSeriesChart points={series.points} label={series.label} unit={series.unit} />}
-          {analysis.kind === 'distribution' && <DistributionChart bins={series.bins} label={series.label} unit={series.unit} />}
+          {analysis.kind === 'distribution' && <DistributionChart bins={series.bins} stats={series.stats} label={series.label} unit={series.unit} />}
           {analysis.kind === 'statistics' && (
             <dl className="analysis-stats">
               {Object.entries(series.stats).map(([name, value]) => (

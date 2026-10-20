@@ -41,6 +41,9 @@ class AnalysisTests(unittest.TestCase):
     def test_distribution_and_stats_use_only_numeric_matches(self):
         distribution = analyze_measurements(self.rows, {}, [300], "distribution", "history")
         self.assertEqual(sum(bin_["count"] for bin_ in distribution["series"][0]["bins"]), 2)
+        self.assertEqual(distribution["series"][0]["stats"]["median"], 1.5)
+        self.assertEqual(distribution["series"][0]["stats"]["q1"], 1.25)
+        self.assertEqual(distribution["series"][0]["stats"]["q3"], 1.75)
         statistics = analyze_measurements(self.rows, {}, [300], "statistics", "history")
         self.assertEqual(statistics["series"][0]["stats"]["median"], 1.5)
         self.assertEqual(statistics["series"][0]["stats"]["count"], 2)

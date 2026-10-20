@@ -113,6 +113,17 @@ def analyze_measurements(rows: pd.DataFrame, names: dict[int, str],
                       "unit_concept_id": int(unit_id) if pd.notna(unit_id) else None,
                       "source_rows": len(group), "numeric_count": len(numeric),
                       "excluded_count": len(group) - len(numeric)}
+        values = numeric["_value"].to_numpy(dtype=float)
+        item["stats"] = {
+            "count": len(values),
+            "min": float(np.min(values)) if len(values) else None,
+            "q1": float(np.quantile(values, 0.25)) if len(values) else None,
+            "median": float(np.median(values)) if len(values) else None,
+            "mean": float(np.mean(values)) if len(values) else None,
+            "q3": float(np.quantile(values, 0.75)) if len(values) else None,
+            "max": float(np.max(values)) if len(values) else None,
+            "std": float(np.std(values, ddof=1)) if len(values) > 1 else None,
+        }
         if kind == "time_series":
             dated = numeric.dropna(subset=["_date"]).sort_values("_date")
             item["excluded_count"] += len(numeric) - len(dated)
@@ -122,7 +133,6 @@ def analyze_measurements(rows: pd.DataFrame, names: dict[int, str],
                 for _, row in dated.iterrows()
             ]
         elif kind == "distribution":
-            values = numeric["_value"].to_numpy(dtype=float)
             if len(values):
                 counts, edges = np.histogram(values, bins=min(10, max(1, int(np.sqrt(len(values))))))
                 item["bins"] = [
@@ -132,16 +142,6 @@ def analyze_measurements(rows: pd.DataFrame, names: dict[int, str],
                 ]
             else:
                 item["bins"] = []
-        else:
-            values = numeric["_value"]
-            item["stats"] = {
-                "count": len(values),
-                "min": float(values.min()) if len(values) else None,
-                "median": float(values.median()) if len(values) else None,
-                "mean": float(values.mean()) if len(values) else None,
-                "max": float(values.max()) if len(values) else None,
-                "std": float(values.std()) if len(values) > 1 else None,
-            }
         series.append(item)
     return {"kind": kind, "table": "measurement", "scope": scope,
             "concept_ids": concept_ids, "source_rows": len(working), "series": series}

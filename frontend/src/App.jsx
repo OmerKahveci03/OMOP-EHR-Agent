@@ -3,6 +3,7 @@ import { serializeSearchRequest } from './searchPayload.js'
 import { testQuestions } from './testQuestions.js'
 import EvidenceTable from './EvidenceTable.jsx'
 import AnalysisResult from './AnalysisResult.jsx'
+import ConceptSelection from './ConceptSelection.jsx'
 
 const statusLabels = {
   offline: 'Local server offline',
@@ -231,35 +232,40 @@ export default function App() {
       {loading && <div className="message" role="status">The model is reviewing patient records. This may take a moment.</div>}
 
       {result && (
-        <section className="panel result" aria-labelledby="answer-heading">
+        <section className={`panel result${result.concept_selection ? ' has-concepts' : ''}`} aria-labelledby="answer-heading">
           <div className="section-heading">
             <span className="step">02</span>
             <h2 className="section-title" id="answer-heading">Answer</h2>
           </div>
-          {result.decision_trace?.length > 0 && <details className="decision-trace" open>
-            <summary>How the result was produced</summary>
-            <ol>
-              {result.decision_trace.map((step, index) => (
-                <li key={`${step.stage}-${index}`}>
-                  <strong>{step.stage}</strong><span>{step.detail}</span>
-                </li>
-              ))}
-            </ol>
-          </details>}
-          <p className="answer">{result.answer}</p>
-          <AnalysisResult analysis={result.analysis} />
-          {result.evidence?.length > 0 && <details className="evidence">
-            <summary className="evidence-toggle">View retrieved records ({result.evidence?.length ?? 0} tables)</summary>
-            <p className="evidence-date-note">
-              {result.evidence?.[0]?.retrieval_scope === 'history'
-                ? 'Evidence includes earlier encounters.'
-                : 'Evidence is limited to the latest encounter unless the question requests history.'}
-              {' '}Dates are de-identified and may be shifted by more than a century.
-            </p>
-            {(result.evidence ?? []).map((item, index) => (
-              <EvidenceTable item={item} key={`${item.table}-${index}`} />
-            ))}
-          </details>}
+          <div className="result-layout">
+            <div className="result-main">
+              {result.decision_trace?.length > 0 && <details className="decision-trace" open>
+                <summary>How the result was produced</summary>
+                <ol>
+                  {result.decision_trace.map((step, index) => (
+                    <li key={`${step.stage}-${index}`}>
+                      <strong>{step.stage}</strong><span>{step.detail}</span>
+                    </li>
+                  ))}
+                </ol>
+              </details>}
+              <p className="answer">{result.answer}</p>
+              <AnalysisResult analysis={result.analysis} />
+              {result.evidence?.length > 0 && <details className="evidence">
+                <summary className="evidence-toggle">View retrieved records ({result.evidence?.length ?? 0} tables)</summary>
+                <p className="evidence-date-note">
+                  {result.evidence?.[0]?.retrieval_scope === 'history'
+                    ? 'Evidence includes earlier encounters.'
+                    : 'Evidence is limited to the latest encounter unless the question requests history.'}
+                  {' '}Dates are de-identified and may be shifted by more than a century.
+                </p>
+                {(result.evidence ?? []).map((item, index) => (
+                  <EvidenceTable item={item} key={`${item.table}-${index}`} />
+                ))}
+              </details>}
+            </div>
+            {result.concept_selection && <ConceptSelection selection={result.concept_selection} />}
+          </div>
         </section>
       )}
     </main>

@@ -226,6 +226,7 @@ def select_action_plan(model: PreTrainedModel,
             return {"action": "unsupported", "reason": "Could not identify the requested measurement concepts."}
         parsed_ids.append(parsed_id)
     parsed_ids = list(dict.fromkeys(parsed_ids))
+    direct_concept_ids = parsed_ids.copy()
     if not isinstance(ancestor_ids, list):
         ancestor_ids = []
     ancestor_options = {item["ancestor_id"]: item["descendant_ids"]
@@ -246,6 +247,7 @@ def select_action_plan(model: PreTrainedModel,
     return {"action": action, "scope": scope,
             "tables": list(dict.fromkeys(tables)),
             "concept_ids": parsed_ids,
+            "direct_concept_ids": direct_concept_ids,
             "ancestor_ids": list(dict.fromkeys(selected_ancestors))}
 
 
@@ -541,11 +543,22 @@ def run_patient_request(person_id: int, request: str, data_dir: str,
         return {"kind": "unsupported", "answer": reason,
                 "evidence": [], "analysis": None, "decision_trace": trace}
     plan = {**route, "concept_ids": [], "ancestor_ids": []}
+    concept_selection = None
     if "measurement" in route["tables"]:
         measurement_rows = patient_table(data_dir, "measurement", person_id, "history", None)
         candidates = measurement_catalog(measurement_rows, concept_names, request)
         ancestor_candidates = measurement_ancestor_catalog(
             measurement_rows, concept_names, load_measurement_ancestors(data_dir), request)
+        concept_selection = {
+            "candidates": candidates,
+            "ancestor_candidates": [
+                {"ancestor_id": item["ancestor_id"], "name": item["name"],
+                 "patient_descendant_count": item["patient_descendant_count"]}
+                for item in ancestor_candidates
+            ],
+            "selected_concepts": [], "selected_ancestors": [],
+            "selection_mode": "none",
+        }
         trace.append({"stage": "Candidates", "detail":
                       f"Found {len(candidates)} patient measurement concepts and "
                       f"{len(ancestor_candidates)} matching ancestor groups."})
@@ -555,9 +568,29 @@ def run_patient_request(person_id: int, request: str, data_dir: str,
             reason = selection.get("reason", "Could not select the requested measurements.")
             trace.append({"stage": "Validation", "detail": reason})
             return {"kind": "unsupported", "answer": reason,
-                    "evidence": [], "analysis": None, "decision_trace": trace}
+                    "evidence": [], "analysis": None, "decision_trace": trace,
+                    "concept_selection": concept_selection}
         plan["concept_ids"] = selection["concept_ids"]
         plan["ancestor_ids"] = selection["ancestor_ids"]
+        counts = pd.to_numeric(measurement_rows["measurement_concept_id"], errors="coerce").value_counts()
+        candidate_by_id = {item["concept_id"]: item for item in candidates}
+        direct_ids = set(selection["direct_concept_ids"])
+        concept_selection["selected_concepts"] = [
+            {"concept_id": concept_id,
+             "name": candidate_by_id[concept_id]["name"] if concept_id in candidate_by_id
+                     else concept_names.get(concept_id, str(concept_id)),
+             "row_count": int(counts.get(concept_id, 0)),
+             "source": "direct" if concept_id in direct_ids else "ancestor"}
+            for concept_id in plan["concept_ids"]
+        ]
+        selected_ancestor_ids = set(plan["ancestor_ids"])
+        concept_selection["selected_ancestors"] = [
+            item for item in concept_selection["ancestor_candidates"]
+            if item["ancestor_id"] in selected_ancestor_ids
+        ]
+        concept_selection["selection_mode"] = (
+            "selected" if plan["concept_ids"] else "all_measurements"
+        )
         trace.append({"stage": "Model concept selection", "detail":
                       f"Concepts: {', '.join(f'{concept_id} ({concept_names.get(concept_id, "unknown")})' for concept_id in plan['concept_ids']) or 'none'}; "
                       f"ancestors: {', '.join(f'{ancestor_id} ({concept_names.get(ancestor_id, "unknown")})' for ancestor_id in plan['ancestor_ids']) or 'none'}."})
@@ -589,7 +622,8 @@ def run_patient_request(person_id: int, request: str, data_dir: str,
         trace.append({"stage": "Answer", "detail":
                       "Generated a record summary and checked its citations against returned evidence."})
         return {"kind": "records", "answer": answer, "evidence": evidence,
-                "analysis": None, "decision_trace": trace}
+                "analysis": None, "decision_trace": trace,
+                "concept_selection": concept_selection}
 
     encounter = latest_encounter(data_dir, person_id) if plan["scope"] == "latest_encounter" else None
     if plan["scope"] == "latest_encounter" and encounter is None:
@@ -615,7 +649,8 @@ def run_patient_request(person_id: int, request: str, data_dir: str,
                   f"Computed {action} from {result['source_rows']} source rows; "
                   f"{len(result['series'])} concept and unit groups."})
     return {"kind": action, "answer": answer, "evidence": evidence,
-            "analysis": result, "decision_trace": trace}
+            "analysis": result, "decision_trace": trace,
+            "concept_selection": concept_selection}
 
 
 if __name__ == "__main__":

@@ -273,6 +273,138 @@
     &.result {
       margin-top: 22px;
 
+      &.has-concepts {
+        position: relative;
+        left: 50%;
+        width: min(1140px, calc(100vw - 32px));
+        transform: translateX(-50%);
+
+        .result-layout {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(250px, 290px);
+          align-items: start;
+          gap: 22px;
+        }
+      }
+
+      .result-main {
+        min-width: 0;
+      }
+
+      .concept-sidebar {
+        position: sticky;
+        top: 18px;
+        min-width: 0;
+        padding: 18px;
+        border: 1px solid #dce8e1;
+        border-radius: 12px;
+        background: #f7faf8;
+
+        h3 {
+          margin: 0 0 6px;
+          font-size: 16px;
+        }
+
+        h4 {
+          margin: 0 0 8px;
+          font-size: 13px;
+
+          span { color: #667d77; font-weight: 400; }
+        }
+
+        p {
+          margin: 0 0 10px;
+          color: #667d77;
+          font-size: 12px;
+          line-height: 1.45;
+        }
+
+        .concept-sidebar-section {
+          margin-top: 18px;
+          padding-top: 16px;
+          border-top: 1px solid #dce8e1;
+        }
+
+        .concept-list {
+          display: grid;
+          gap: 6px;
+          margin: 0;
+          padding: 0;
+          list-style: none;
+        }
+
+        .candidate-list {
+          max-height: 350px;
+          overflow-y: auto;
+        }
+
+        .selected-list {
+          max-height: 270px;
+          overflow-y: auto;
+        }
+
+        .concept-item {
+          min-width: 0;
+          padding: 9px;
+          border: 1px solid #e1eae5;
+          border-radius: 8px;
+          background: #fff;
+
+          &.selected {
+            border-color: #a8d2bf;
+            background: #eaf5ef;
+          }
+        }
+
+        .concept-item-name {
+          display: block;
+          font-size: 12px;
+          font-weight: 700;
+          line-height: 1.35;
+          overflow-wrap: anywhere;
+        }
+
+        .concept-item-meta {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 4px 8px;
+          margin-top: 5px;
+          color: #667d77;
+          font-size: 11px;
+        }
+
+        code {
+          font-size: 11px;
+        }
+
+        .concept-source {
+          color: #246e58;
+          font-weight: 700;
+        }
+
+        .concept-ancestor-selection {
+          margin-bottom: 10px;
+          font-size: 12px;
+
+          span { color: #526b62; font-weight: 700; }
+
+          ul { margin: 6px 0 0; padding-left: 18px; }
+
+          li { margin: 4px 0; }
+        }
+
+        .ancestor-candidates {
+          summary {
+            color: #246e58;
+            font-size: 12px;
+            font-weight: 700;
+            cursor: pointer;
+          }
+
+          .concept-list { margin-top: 10px; max-height: 240px; overflow-y: auto; }
+        }
+      }
+
       .decision-trace {
         margin-bottom: 20px;
         padding: 14px 18px;
@@ -342,14 +474,48 @@
           }
         }
 
+        .analysis-highlights {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+          gap: 8px;
+          margin: 16px 0 10px;
+
+          div {
+            padding: 10px 12px;
+            border-radius: 8px;
+            background: #f1f5f3;
+          }
+
+          dt {
+            color: #526b62;
+            font-size: 11px;
+          }
+
+          dd {
+            margin: 5px 0 0;
+            color: #23433d;
+            font-size: 14px;
+            font-weight: 700;
+          }
+
+        }
+
         .analysis-chart {
           width: 100%;
-          height: 300px;
+          height: 270px;
           min-width: 0;
         }
 
+        .analysis-axis-title {
+          margin: 0;
+          text-align: center;
+          font-size: 12px;
+          font-weight: 600;
+          color: #526b62;
+        }
+
         .analysis-chart-note {
-          margin: 0 0 4px;
+          margin: 8px 0 4px;
         }
 
         .analysis-tooltip {
@@ -539,5 +705,15 @@
         }
       }
     }
+  }
+}
+
+@media (max-width: 850px) {
+  .page .panel.result.has-concepts .result-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .page .panel.result .concept-sidebar {
+    position: static;
   }
 }

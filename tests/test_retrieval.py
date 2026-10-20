@@ -150,6 +150,7 @@ class RetrievalTests(unittest.TestCase):
                                       ["measurement"], [], ancestor_options)
         self.assertEqual(plan["concept_ids"], [300, 301])
         self.assertEqual(plan["ancestor_ids"], [100])
+        self.assertEqual(plan["direct_concept_ids"], [])
 
     def test_action_route_uses_ancestor_catalog(self):
         with patch("src.hipergator.patient_search.generate", side_effect=[
@@ -164,6 +165,11 @@ class RetrievalTests(unittest.TestCase):
             )
         self.assertEqual(result["analysis"]["concept_ids"], [300, 301])
         self.assertEqual(result["analysis"]["ancestor_ids"], [100])
+        selection = result["concept_selection"]
+        self.assertEqual(selection["selection_mode"], "selected")
+        self.assertEqual([item["concept_id"] for item in selection["selected_concepts"]], [300, 301])
+        self.assertTrue(all(item["source"] == "ancestor" for item in selection["selected_concepts"]))
+        self.assertEqual(selection["selected_ancestors"][0]["ancestor_id"], 100)
         self.assertIn('"ancestor_id": 100', generate.call_args.kwargs["user"])
 
     def test_action_plan_handles_patient_as_time_scope(self):
@@ -214,6 +220,7 @@ class RetrievalTests(unittest.TestCase):
         self.assertEqual(result["evidence"][1]["total_rows"], 2)
         self.assertEqual(result["evidence"][1]["retrieval_scope"], "history")
         self.assertNotIn("Candidates", [step["stage"] for step in result["decision_trace"]])
+        self.assertIsNone(result["concept_selection"])
 
     def test_condition_history_supplies_complete_summary_for_generated_answer(self):
         root = Path(self.directory.name)
@@ -286,6 +293,11 @@ class RetrievalTests(unittest.TestCase):
         self.assertEqual(result["kind"], "time_series")
         self.assertEqual(result["analysis"]["source_rows"], 2)
         self.assertEqual(len(result["analysis"]["series"][0]["points"]), 2)
+        selection = result["concept_selection"]
+        self.assertEqual(selection["selected_concepts"], [
+            {"concept_id": 300, "name": "Example", "row_count": 3, "source": "direct"}
+        ])
+        self.assertEqual({item["concept_id"] for item in selection["candidates"]}, {300, 301})
 
     def test_action_route_returns_filtered_source_records(self):
         model = SimpleNamespace(config=SimpleNamespace(max_position_embeddings=16384))
