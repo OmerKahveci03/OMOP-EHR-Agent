@@ -13,6 +13,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenize
 from transformers.tokenization_utils_base import BatchEncoding
 
 from . import LLAMA_PATH
+from .analysis import ANALYSIS_KINDS, analyze_measurements, measurement_catalog
 from .concepts import add_concept_names, load_concept_names
 from .retrieval import json_records, latest_encounter, patient_table, summarize_measurements
 from .utils.paths import get_path
@@ -97,6 +98,64 @@ def select_retrieval_plan(model: PreTrainedModel,
     return list(dict.fromkeys(names))[:5], cast(ScopeType, scope)
 
 
+def select_action_plan(model: PreTrainedModel,
+                       tokenizer: PreTrainedTokenizerBase,
+                       request: str, available: list[str],
+                       candidates: list[dict]) -> dict:
+    """Choose a validated patient-scoped retrieval or measurement operation."""
+    response = generate(
+        model=model, tokenizer=tokenizer,
+        system=(
+            "You navigate one patient's OMOP data. Return only JSON with keys "
+            "action, scope, tables, concept_ids. Actions: records, time_series, "
+            "distribution, statistics, unsupported. Use records to show source rows; "
+            "use an analysis action only for numeric measurement requests. "
+            "The analysis actions calculate values directly from recorded measurements; "
+            "they cannot derive rates or perform unit conversions. Choose unsupported "
+            "when the requested calculation needs either. Choose concept_ids only from "
+            "the supplied patient-specific candidates. Use [] only when the user "
+            "explicitly asks about all measurements; for a named measurement "
+            "with no matching candidate choose unsupported. "
+            "Choose latest_encounter unless the question asks for history, earlier "
+            "encounters, or a comparison across encounters. Use history for a list "
+            "of visits. Choose tables only from the supplied list, at most five. "
+            "Analysis actions use the measurement table. Never generate SQL or Python."
+        ),
+        user=f"Available tables: {json.dumps(available)}\n"
+             f"Measurement candidates: {json.dumps(candidates)}\nQuestion: {request}",
+        max_new_tokens=256,
+    )
+    match = re.search(r"\{[\s\S]*\}", response)
+    if not match:
+        raise ValueError(f"Model did not return an action plan: {response}")
+    plan = json.loads(match.group())
+    if not isinstance(plan, dict):
+        raise ValueError("Action plan must be a JSON object")
+    action = plan.get("action")
+    scope = plan.get("scope")
+    tables = plan.get("tables")
+    concept_ids = plan.get("concept_ids")
+    if action not in ("records", *ANALYSIS_KINDS, "unsupported"):
+        raise ValueError(f"Unsupported action: {action}")
+    if scope not in SCOPE_VALUES:
+        raise ValueError(f"Invalid time scope: {scope}")
+    if not isinstance(tables, list) or len(tables) > 5 or any(
+        not isinstance(table, str) or table not in available for table in tables
+    ):
+        raise ValueError(f"Unavailable tables in action plan: {tables}")
+    candidate_ids = {item["concept_id"] for item in candidates}
+    if not isinstance(concept_ids, list) or any(
+        isinstance(concept_id, bool) or not isinstance(concept_id, int)
+        or concept_id not in candidate_ids for concept_id in concept_ids
+    ):
+        raise ValueError(f"Unavailable measurement concepts: {concept_ids}")
+    if action in ANALYSIS_KINDS and "measurement" not in available:
+        raise ValueError("Measurement table is unavailable")
+    return {"action": action, "scope": scope,
+            "tables": list(dict.fromkeys(tables)),
+            "concept_ids": list(dict.fromkeys(concept_ids))}
+
+
 def patient_rows(data_dir: str, table: str, 
                  person_id: int, limit: int = 100,
                  scope: ScopeType = "history", 
@@ -159,7 +218,10 @@ def search_patient(person_id: int, request: str,
                    data_dir: str,
                    model: PreTrainedModel,
                    tokenizer: PreTrainedTokenizerBase,
-                   concept_names: dict[int, str]) -> tuple[str, list[dict]]:
+                   concept_names: dict[int, str],
+                   retrieval_plan: tuple[list[str], ScopeType] | None = None,
+                   measurement_concept_ids: list[int] | None = None,
+                   include_measurement_rows: bool = False) -> tuple[str, list[dict]]:
     """ Given a patient and natural language request, return EHR. """
 
     # --- Sanity Check ---
@@ -185,10 +247,9 @@ def search_patient(person_id: int, request: str,
                             os.path.isfile(os.path.join(data_dir, f"{table}.parquet"))]
 
     # NOTE: By default we focus on the latest encounter's EHR
-    selected, scope = select_retrieval_plan(model=model, 
-                                            tokenizer=tokenizer, 
-                                            request=request, 
-                                            available=available)
+    selected, scope = retrieval_plan or select_retrieval_plan(
+        model=model, tokenizer=tokenizer, request=request, available=available
+    )
 
     # --- Optionally Use Latest Encounter ---
     encounter: Optional[dict] = (
@@ -215,8 +276,14 @@ def search_patient(person_id: int, request: str,
                                                        person_id=person_id, 
                                                        scope=scope, 
                                                        encounter=encounter)
-
-            evidence.append(summarize_measurements(rows=measurements))
+            if measurement_concept_ids:
+                ids = pd.to_numeric(measurements["measurement_concept_id"], errors="coerce")
+                measurements = measurements[ids.isin(measurement_concept_ids)]
+            if include_measurement_rows:
+                evidence.append({"table": "measurement", "total_rows": len(measurements),
+                                 "shown_rows": json_records(measurements.head(100))})
+            else:
+                evidence.append(summarize_measurements(rows=measurements))
         else:
             evidence.append(patient_rows(data_dir=data_dir, table=name, 
                                          person_id=person_id, scope=scope, 
@@ -248,13 +315,66 @@ def search_patient(person_id: int, request: str,
         "a century. Keep dates as recorded, but do not describe them as future events.",
         user=f"Question: {request}\nPerson ID: {person_id}\n"
         f"Retrieval scope: {scope}. "
-        "Measurement summaries group all matching numeric values by visit, type, and unit; "
-        "std is sample standard deviation, and non-numeric values are counted separately. "
-        "Do not claim to have seen individual measurement rows beyond the summary.\n"
+        "Measurement summaries, if present, group numeric values by visit, type, and unit. "
+        "Do not claim to have seen rows beyond the supplied evidence.\n"
         f"Evidence (some tables may be truncated): {json.dumps(evidence)}",
         max_new_tokens=512,
     )
     return answer, evidence
+
+
+def run_patient_request(person_id: int, request: str, data_dir: str,
+                        model: PreTrainedModel, tokenizer: PreTrainedTokenizerBase,
+                        concept_names: dict[int, str]) -> dict:
+    """Route a request to source records or a validated measurement analysis."""
+    person = patient_table(data_dir, "person", person_id, "history", None)
+    if person.empty:
+        raise ValueError(f"person_id {person_id} was not found in PERSON")
+    available = [table for table in CLINICAL_TABLES
+                 if os.path.isfile(os.path.join(data_dir, f"{table}.parquet"))]
+    measurement_rows = (
+        patient_table(data_dir, "measurement", person_id, "history", None)
+        if "measurement" in available else pd.DataFrame()
+    )
+    candidates = measurement_catalog(measurement_rows, concept_names, request)
+    plan = select_action_plan(model, tokenizer, request, available, candidates)
+    action = plan["action"]
+    if action == "unsupported":
+        return {"kind": "unsupported", "answer":
+                "This request needs a calculation that the available analysis tools do not support.",
+                "evidence": [], "analysis": None}
+    if action == "records":
+        selected = [table for table in plan["tables"] if table not in ("person", "visit_occurrence")]
+        answer, evidence = search_patient(
+            person_id=person_id, request=request, data_dir=data_dir,
+            model=model, tokenizer=tokenizer, concept_names=concept_names,
+            retrieval_plan=(selected, plan["scope"]),
+            measurement_concept_ids=plan["concept_ids"],
+            include_measurement_rows=True,
+        )
+        return {"kind": "records", "answer": answer, "evidence": evidence,
+                "analysis": None}
+
+    encounter = latest_encounter(data_dir, person_id) if plan["scope"] == "latest_encounter" else None
+    if plan["scope"] == "latest_encounter" and encounter is None:
+        raise ValueError(f"person_id {person_id} has no VISIT_OCCURRENCE record")
+    rows = patient_table(data_dir, "measurement", person_id, plan["scope"], encounter)
+    result = analyze_measurements(rows, concept_names, plan["concept_ids"], action,
+                                  plan["scope"])
+    matched = rows
+    if plan["concept_ids"]:
+        ids = pd.to_numeric(rows["measurement_concept_id"], errors="coerce")
+        matched = rows[ids.isin(plan["concept_ids"])]
+    evidence = add_concept_names([{
+        "table": "measurement", "total_rows": len(matched),
+        "shown_rows": json_records(matched.head(100)),
+        "retrieval_scope": plan["scope"],
+    }], concept_names)
+    if result["source_rows"]:
+        answer = f"Found {result['source_rows']} matching measurement records across {len(result['series'])} concept and unit groups."
+    else:
+        answer = "No matching measurement records were found for this patient and time scope."
+    return {"kind": action, "answer": answer, "evidence": evidence, "analysis": result}
 
 
 if __name__ == "__main__":

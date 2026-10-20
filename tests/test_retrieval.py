@@ -9,7 +9,9 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from src.hipergator.patient_search import search_patient, select_retrieval_plan
+from src.hipergator.patient_search import (
+    run_patient_request, search_patient, select_action_plan, select_retrieval_plan,
+)
 from src.hipergator.retrieval import latest_encounter, patient_table, summarize_measurements
 
 
@@ -88,7 +90,7 @@ class RetrievalTests(unittest.TestCase):
         self.assertEqual(answer, "answer")
         self.assertEqual(evidence[0]["retrieval_scope"], "latest_encounter")
         self.assertEqual(evidence[-1]["source_rows"], 3)
-        self.assertIn("measurement_concept_id_name", generate.call_args.args[3])
+        self.assertIn("measurement_concept_id_name", generate.call_args.kwargs["user"])
 
         with patch("src.hipergator.patient_search.generate", side_effect=[
             '{"tables":["measurement"],"scope":"history"}', "answer",
@@ -97,6 +99,45 @@ class RetrievalTests(unittest.TestCase):
                                                  model, Tokenizer(), {300: "Example", 900: "mg/dL"})
         self.assertEqual(history_evidence[0]["retrieval_scope"], "history")
         self.assertEqual(history_evidence[-1]["source_rows"], 4)
+
+    def test_action_plan_rejects_concepts_outside_patient_catalog(self):
+        model = SimpleNamespace()
+        with patch("src.hipergator.patient_search.generate", return_value=(
+            '{"action":"time_series","scope":"history","tables":["measurement"],'
+            '"concept_ids":[999]}'
+        )):
+            with self.assertRaisesRegex(ValueError, "Unavailable measurement concepts"):
+                select_action_plan(model, Tokenizer(), "trend", ["measurement"],
+                                   [{"concept_id": 300, "name": "Example"}])
+
+    def test_action_route_returns_chart_ready_patient_data(self):
+        model = SimpleNamespace(config=SimpleNamespace(max_position_embeddings=16384))
+        with patch("src.hipergator.patient_search.generate", return_value=(
+            '{"action":"time_series","scope":"latest_encounter",'
+            '"tables":["measurement"],"concept_ids":[300]}'
+        )):
+            result = run_patient_request(7, "plot Example during latest encounter",
+                                         self.directory.name, model, Tokenizer(),
+                                         {300: "Example"})
+        self.assertEqual(result["kind"], "time_series")
+        self.assertEqual(result["analysis"]["source_rows"], 2)
+        self.assertEqual(len(result["analysis"]["series"][0]["points"]), 2)
+
+    def test_action_route_returns_filtered_source_records(self):
+        model = SimpleNamespace(config=SimpleNamespace(max_position_embeddings=16384))
+        with patch("src.hipergator.patient_search.generate", side_effect=[
+            '{"action":"records","scope":"history",'
+            '"tables":["measurement"],"concept_ids":[300]}',
+            "Here are the matching measurements.",
+        ]):
+            result = run_patient_request(7, "show Example measurements",
+                                         self.directory.name, model, Tokenizer(),
+                                         {300: "Example"})
+        self.assertEqual(result["kind"], "records")
+        measurements = next(item for item in result["evidence"] if item["table"] == "measurement")
+        self.assertEqual(measurements["total_rows"], 3)
+        self.assertTrue(all(row["measurement_concept_id"] == 300
+                            for row in measurements["shown_rows"]))
 
 
 if __name__ == "__main__":

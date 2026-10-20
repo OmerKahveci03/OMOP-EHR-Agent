@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { serializeSearchRequest } from './searchPayload.js'
+import { testQuestions } from './testQuestions.js'
 import EvidenceTable from './EvidenceTable.jsx'
+import AnalysisResult from './AnalysisResult.jsx'
 
 const statusLabels = {
   offline: 'Local server offline',
@@ -16,6 +18,7 @@ const statusLabels = {
 export default function App() {
   const [personId, setPersonId] = useState('')
   const [question, setQuestion] = useState('')
+  const [selectedTestQuestion, setSelectedTestQuestion] = useState('')
   const [result, setResult] = useState(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -181,6 +184,24 @@ export default function App() {
             />
           </div>
           <div className="field field-question">
+            <label className="field-label" htmlFor="test-question">Test question catalog</label>
+            <select
+              className="field-control test-question-select"
+              id="test-question"
+              value={selectedTestQuestion}
+              onChange={(event) => {
+                const selected = event.target.value
+                setSelectedTestQuestion(selected)
+                if (selected !== '') setQuestion(testQuestions[Number(selected)].question)
+              }}
+              disabled={loading}
+            >
+              <option value="">Choose a test question</option>
+              {testQuestions.map((item, index) => (
+                <option value={index} key={item.label}>{index + 1}. {item.label}</option>
+              ))}
+            </select>
+            <p className="field-help">Choosing a question fills the box below. You can edit it before searching.</p>
             <label className="field-label" htmlFor="question">Your question</label>
             <textarea
               className="field-control"
@@ -188,7 +209,10 @@ export default function App() {
               rows="4"
               placeholder="What were this patient's recent visits?"
               value={question}
-              onChange={(event) => setQuestion(event.target.value)}
+              onChange={(event) => {
+                setQuestion(event.target.value)
+                setSelectedTestQuestion('')
+              }}
               disabled={!tunnelReady || loading}
               required
             />
@@ -213,7 +237,8 @@ export default function App() {
             <h2 className="section-title" id="answer-heading">Answer</h2>
           </div>
           <p className="answer">{result.answer}</p>
-          <details className="evidence">
+          <AnalysisResult analysis={result.analysis} />
+          {result.evidence?.length > 0 && <details className="evidence">
             <summary className="evidence-toggle">View retrieved records ({result.evidence?.length ?? 0} tables)</summary>
             <p className="evidence-date-note">
               {result.evidence?.[0]?.retrieval_scope === 'history'
@@ -224,7 +249,7 @@ export default function App() {
             {(result.evidence ?? []).map((item, index) => (
               <EvidenceTable item={item} key={`${item.table}-${index}`} />
             ))}
-          </details>
+          </details>}
         </section>
       )}
     </main>

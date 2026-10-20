@@ -10,7 +10,7 @@ import pandas as pd
 from flask import Flask, Response, jsonify, request as flask_request
 
 from . import LLAMA_PATH, SERVER_PORT
-from .patient_search import load_model, search_patient
+from .patient_search import load_model, run_patient_request
 from .concepts import load_concept_names
 from .utils.paths import get_path
 
@@ -79,17 +79,17 @@ def create_app(model_path: str = LLAMA_PATH) -> Flask:
         try:
             # Only one at a time
             with generation_lock:
-                answer, evidence = search_patient(person_id=person_id, 
-                                                  request=request, 
-                                                  data_dir=data_dir, 
-                                                  model=model, 
-                                                  tokenizer=tokenizer,
-                                                  concept_names=concept_names)
+                result = run_patient_request(person_id=person_id,
+                                             request=request,
+                                             data_dir=data_dir,
+                                             model=model,
+                                             tokenizer=tokenizer,
+                                             concept_names=concept_names)
 
         except ValueError as exc:
             return jsonify(error=str(exc)), 404 if "was not found" in str(exc) else 400
 
-        return jsonify(answer=answer, evidence=evidence)
+        return jsonify(result)
 
     return app
 
