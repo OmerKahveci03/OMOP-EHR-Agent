@@ -110,6 +110,37 @@ class RetrievalTests(unittest.TestCase):
                 select_action_plan(model, Tokenizer(), "trend", ["measurement"],
                                    [{"concept_id": 300, "name": "Example"}])
 
+    def test_action_plan_handles_patient_as_time_scope(self):
+        model = SimpleNamespace()
+        with patch("src.hipergator.patient_search.generate", return_value=(
+            '{"action":"unsupported","scope":"patient"}'
+        )):
+            plan = select_action_plan(model, Tokenizer(),
+                                      "Calculate urine output rate during the latest encounter",
+                                      ["measurement"], [])
+        self.assertEqual(plan["action"], "unsupported")
+
+        with patch("src.hipergator.patient_search.generate", return_value=(
+            '{"action":"records","scope":"patient",'
+            '"tables":["measurement"],"concept_ids":[]}'
+        )):
+            plan = select_action_plan(model, Tokenizer(),
+                                      "Show measurements during the latest encounter",
+                                      ["measurement"], [])
+        self.assertEqual(plan["scope"], "latest_encounter")
+
+    def test_unsupported_rate_request_returns_result(self):
+        model = SimpleNamespace()
+        with patch("src.hipergator.patient_search.generate", return_value=(
+            '{"action":"unsupported","scope":"patient"}'
+        )):
+            result = run_patient_request(
+                7, "Calculate urine output rate during the latest encounter",
+                self.directory.name, model, Tokenizer(), {},
+            )
+        self.assertEqual(result["kind"], "unsupported")
+        self.assertIsNone(result["analysis"])
+
     def test_action_route_returns_chart_ready_patient_data(self):
         model = SimpleNamespace(config=SimpleNamespace(max_position_embeddings=16384))
         with patch("src.hipergator.patient_search.generate", return_value=(

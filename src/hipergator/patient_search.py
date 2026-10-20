@@ -116,7 +116,8 @@ def select_action_plan(model: PreTrainedModel,
             "the supplied patient-specific candidates. Use [] only when the user "
             "explicitly asks about all measurements; for a named measurement "
             "with no matching candidate choose unsupported. "
-            "Choose latest_encounter unless the question asks for history, earlier "
+            "Scope means time only: use exactly latest_encounter or history, never "
+            "patient or person. Choose latest_encounter unless the question asks for history, earlier "
             "encounters, or a comparison across encounters. Use history for a list "
             "of visits. Choose tables only from the supplied list, at most five. "
             "Analysis actions use the measurement table. Never generate SQL or Python."
@@ -137,8 +138,15 @@ def select_action_plan(model: PreTrainedModel,
     concept_ids = plan.get("concept_ids")
     if action not in ("records", *ANALYSIS_KINDS, "unsupported"):
         raise ValueError(f"Unsupported action: {action}")
+    if action == "unsupported":
+        return {"action": "unsupported", "scope": "latest_encounter",
+                "tables": [], "concept_ids": []}
     if scope not in SCOPE_VALUES:
-        raise ValueError(f"Invalid time scope: {scope}")
+        scope = (
+            "history" if re.search(r"\b(history|earlier|previous|ever|all (?:encounters|visits)|across (?:all )?(?:encounters|visits))\b",
+                                   request, flags=re.IGNORECASE)
+            else "latest_encounter"
+        )
     if not isinstance(tables, list) or len(tables) > 5 or any(
         not isinstance(table, str) or table not in available for table in tables
     ):
