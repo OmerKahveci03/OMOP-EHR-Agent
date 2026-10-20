@@ -16,10 +16,6 @@ This file is one row per column, and it tells us the inferred dtype, file type i
 number of rows in the file type, and number of unique patients if the file type had a `person_id`
 column.
 
-The Athena vocabulary download must be extracted to
-`$HPG_BASE_DIR/vocabulary_download_v5/CONCEPT.csv` before preprocessing. The script
-streams this tab-delimited file and combines it with MIMIC's local
-`2b_concept.csv` into `cleaned_data/concept.parquet`. Local MIMIC concepts take
-precedence if an ID appears in both sources. The original CSV files are retained.
-Run `python -m src.hipergator.preprocess` after the upload completes; use
-`--overwrite` to rebuild all cleaned tables.
+OMOP concepts were downloaded from [OHDSI Athena](https://athena.ohdsi.org/)
+to `$HPG_BASE_DIR/vocabulary_download_v5/CONCEPT.csv`. Preprocessing combines
+them with MIMIC's local concepts in `cleaned_data/concept.parquet`.

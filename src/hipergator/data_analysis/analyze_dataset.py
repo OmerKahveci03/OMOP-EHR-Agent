@@ -22,6 +22,8 @@ def analyze_dataset(base_dir: str = HPG_BASE_DIR) -> list[str]:
     # --- Summarize each table ---
     workbook_paths: list[str] = []
     for parquet_file in parquet_files:
+        if parquet_file.stem == "concept":
+            continue  # Vocabulary lookup table, not a patient dataset.
         df: pd.DataFrame = pd.read_parquet(path=parquet_file)
         concept_columns: list[str] = [
             column for column in df.columns if column.endswith("_concept_id")
@@ -38,7 +40,12 @@ def analyze_dataset(base_dir: str = HPG_BASE_DIR) -> list[str]:
             f"{primary_concept_column}_name"
             if primary_concept_column in concept_columns else None
         )
-        summary: DatasetSummary = summarize_df(df=df, group_by=group_by)
+        summary: DatasetSummary = summarize_df(
+            df=df,
+            group_by=group_by,
+            group_types=["numerical"] if group_by else "all",
+            max_groups=1000 if group_by else None,
+        )
         workbook_path: str = write_df_summary(
             summary=summary,
             path=str(summary_dir / f"{parquet_file.stem}_summary.xlsx"),

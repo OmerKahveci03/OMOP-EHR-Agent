@@ -147,7 +147,8 @@ def summarize_binary(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
-def summarize_categorical(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+def summarize_categorical(df: pd.DataFrame, columns: list[str],
+                          max_values_per_column: int = 100) -> pd.DataFrame:
     """
     Summarize observed values and missingness for categorical columns.
 
@@ -162,10 +163,13 @@ def summarize_categorical(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     Returns
     -------
     summary: pd.DataFrame
-        One row per observed non-missing value, with its count and percentage of all
-        rows, plus column-level cardinality and missingness metrics. An entirely missing
-        column is represented by one row with a missing value and counts of zero.
+        Up to ``max_values_per_column`` most frequent values per column, with
+        counts, percentages, full column cardinality, and missingness metrics.
+        An entirely missing column is represented by one row with a missing value.
     """
+
+    if max_values_per_column < 1:
+        raise ValueError("max_values_per_column must be positive")
 
     records: list[dict] = []
     for column in columns:
@@ -179,7 +183,7 @@ def summarize_categorical(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
             "unique_count": len(counts),
             "value_pct": count / len(values) * 100 if len(values) else float("nan"),
             **metrics,
-        } for value, count in counts.items())
+        } for value, count in counts.head(max_values_per_column).items())
         if counts.empty:
             records.append({"column": column, "value": pd.NA, "value_count": 0, "unique_count": 0, "value_pct": 0, **metrics})
     return pd.DataFrame(records)

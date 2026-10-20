@@ -121,6 +121,7 @@ def summarize_df(
     configured_col_types: Optional[dict[ColumnType, Iterable[str]]] = None,
     group_by: str | list[str] | None = None,
     group_types: list[ColumnType] | Literal["all"] = "all",
+    max_groups: int | None = None,
 ) -> dict[str, pd.DataFrame]:
     """
     Classify every DataFrame column and run each type-specific summarizer.
@@ -141,6 +142,8 @@ def summarize_df(
     group_types: list[ColumnType] | Literal["all"] (default "all")
         Column types to summarize by group when ``group_by`` is supplied. Other types
         receive one summary for the full DataFrame.
+    max_groups: int | None (default None)
+        Keep only the most frequent groups. Counts are calculated from all rows.
 
     Returns
     -------
@@ -157,6 +160,8 @@ def summarize_df(
     }
 
     by_columns = [group_by] if isinstance(group_by, str) else group_by
+    if max_groups is not None and max_groups < 1:
+        raise ValueError("max_groups must be positive")
     if group_types != "all":
         if not isinstance(group_types, list) or any(column_type not in _COLUMN_TYPES for column_type in group_types):
             raise ValueError(f"group_types must be 'all' or a list of supported column types: {group_types}")
@@ -168,18 +173,37 @@ def summarize_df(
         if missing_group_columns:
             raise KeyError(f"Grouping columns are missing from the DataFrame: {missing_group_columns}")
 
-    groups = [(None, df)] if by_columns is None else df.groupby(by_columns, dropna=False, sort=False, observed=True)
+    total_group_count: int | None = None
+    if by_columns is None:
+        groups = [(None, df)]
+    else:
+        grouped = df.groupby(by_columns, dropna=False, sort=False, observed=True)
+        if max_groups is None:
+            groups = grouped
+        else:
+            group_sizes = grouped.size()
+            total_group_count = len(group_sizes)
+            top_groups = group_sizes.nlargest(max_groups)
+            groups = [
+                (key if isinstance(key, tuple) else (key,),
+                 grouped.get_group(key if isinstance(key, tuple) else (key,)))
+                for key in top_groups.index
+            ]
     grouped_summaries: dict[str, list[pd.DataFrame]] = {}
     for group, group_df in groups:
         summaries: dict[str, pd.DataFrame] = {
             "dataset": pd.DataFrame([{"row_count": len(group_df), "column_count": len(df.columns)}]),
-            "columns": summarize_columns(df=group_df, column_types=column_types),
-            "binary": summarize_binary(df=group_df, columns=columns_by_type["binary"]),
-            "categorical": summarize_categorical(df=group_df, columns=columns_by_type["categorical"]),
-            "date": summarize_dates(df=group_df, columns=columns_by_type["date"]),
-            "id": summarize_ids(df=group_df, columns=columns_by_type["id"]),
-            "numerical": summarize_numerical(df=group_df, columns=columns_by_type["numerical"]),
         }
+        if by_columns is None or "binary" in grouped_types:
+            summaries["binary"] = summarize_binary(df=group_df, columns=columns_by_type["binary"])
+        if by_columns is None or "categorical" in grouped_types:
+            summaries["categorical"] = summarize_categorical(df=group_df, columns=columns_by_type["categorical"])
+        if by_columns is None or "date" in grouped_types:
+            summaries["date"] = summarize_dates(df=group_df, columns=columns_by_type["date"])
+        if by_columns is None or "id" in grouped_types:
+            summaries["id"] = summarize_ids(df=group_df, columns=columns_by_type["id"])
+        if by_columns is None or "numerical" in grouped_types:
+            summaries["numerical"] = summarize_numerical(df=group_df, columns=columns_by_type["numerical"])
 
         for name, summary in summaries.items():
             if by_columns is not None and name in _COLUMN_TYPES and name not in grouped_types:
@@ -207,6 +231,11 @@ def summarize_df(
                     grouped_summaries[column_type] = [empty_summary]
 
             grouped_summaries["dataset"] = [pd.DataFrame(columns=["group", "row_count", "column_count"])]
+
+    if total_group_count is not None:
+        for dataset_summary in grouped_summaries["dataset"]:
+            dataset_summary["total_groups"] = total_group_count
+            dataset_summary["included_groups"] = min(total_group_count, max_groups)
 
     if grouped_summaries:
         return {name: pd.concat(frames, ignore_index=True) for name, frames in grouped_summaries.items()}
