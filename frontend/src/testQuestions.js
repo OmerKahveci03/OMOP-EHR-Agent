@@ -3,7 +3,7 @@ export const testQuestions = [
   { label: 'Visits', question: "Show me this patient's visits, with the most recent visit first." },
   { label: 'Latest encounter measurements', question: 'What measurements were recorded during the latest encounter? Show the values, units, and dates.' },
   { label: 'Creatinine history', question: "Show this patient's creatinine lab results across all encounters." },
-  { label: 'Blood pressure over time', question: "Plot this patient's systolic and diastolic blood pressure over time during the latest encounter." },
+  { label: 'Blood pressure over time', question: "Show this patient's systolic and diastolic blood pressure measurements over time during the latest encounter." },
   { label: 'Heart rate distribution', question: "Show the distribution of this patient's heart rate measurements across all encounters." },
   { label: 'Glucose statistics', question: "For the latest encounter, what are the count, minimum, median, maximum, and standard deviation of this patient's glucose measurements?" },
   { label: 'Condition history', question: "Which conditions appear in this patient's record, and when were they recorded?" },

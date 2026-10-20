@@ -325,6 +325,13 @@
           border-top: 1px solid #dce8e1;
         }
 
+        .concept-scope-note {
+          padding: 9px 10px;
+          border-radius: 8px;
+          background: #fff1d6;
+          color: #76501c;
+        }
+
         .concept-list {
           display: grid;
           gap: 6px;
@@ -354,6 +361,11 @@
             border-color: #a8d2bf;
             background: #eaf5ef;
           }
+
+          &.unavailable {
+            border-color: #e4d2b5;
+            background: #fffaf1;
+          }
         }
 
         .concept-item-name {
@@ -379,6 +391,11 @@
 
         .concept-source {
           color: #246e58;
+          font-weight: 700;
+        }
+
+        .concept-unavailable {
+          color: #8a5a19;
           font-weight: 700;
         }
 

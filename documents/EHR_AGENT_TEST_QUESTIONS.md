@@ -5,7 +5,7 @@ Use the same patient ID and the exact wording below when comparing agent version
 1. Show me this patient's visits, with the most recent visit first.
 2. What measurements were recorded during the latest encounter? Show the values, units, and dates.
 3. Show this patient's creatinine lab results across all encounters.
-4. Plot this patient's systolic and diastolic blood pressure over time during the latest encounter.
+4. Show this patient's systolic and diastolic blood pressure measurements over time during the latest encounter.
 5. Show the distribution of this patient's heart rate measurements across all encounters.
 6. For the latest encounter, what are the count, minimum, median, maximum, and standard deviation of this patient's glucose measurements?
 7. Which conditions appear in this patient's record, and when were they recorded?

@@ -107,14 +107,19 @@ def select_route_plan(model: PreTrainedModel,
         model=model, tokenizer=tokenizer,
         system=(
             "You navigate one patient's OMOP data. Return only JSON with keys "
-            "action, scope, tables. Actions: records, time_series, distribution, "
-            "statistics, unsupported. Use records to show source rows; use an "
-            "analysis action for numeric measurement summaries. Choose unsupported "
+            "action, scope, tables. Actions: records, analysis, unsupported. "
+            "Use records for source rows or a raw list of values, units, and dates. "
+            "Use analysis when the user asks how numeric measurements change over "
+            "time, for a distribution, or for summary statistics, even if the "
+            "question says show or see rather than plot. An over-time request "
+            "takes precedence over a general request to show values. A later "
+            "step will choose the exact analysis kind. Choose unsupported "
             "for calculations requiring derived rates or unit conversions. Scope "
             "must be latest_encounter or history. A request for visits or encounters "
             "in plural needs history, even if sorted most recent first. Choose at "
-            "most five tables from the available list. Analysis actions require "
-            "measurement. Do not select measurement for unrelated questions."
+            "most five tables from the available list. Numeric analysis currently "
+            "uses only the measurement table; choose only measurement for analysis. "
+            "Do not select measurement for unrelated questions."
         ),
         user=f"Available tables: {json.dumps(available)}\nQuestion: {request}",
         max_new_tokens=128,
@@ -124,15 +129,20 @@ def select_route_plan(model: PreTrainedModel,
         raise ValueError(f"Model did not return a route plan: {response}")
     plan = json.loads(match.group())
     action = plan.get("action")
-    if action not in ("records", *ANALYSIS_KINDS, "unsupported"):
+    if action not in ("records", "analysis", *ANALYSIS_KINDS, "unsupported"):
         raise ValueError(f"Unsupported action: {action}")
     if action == "unsupported":
         return {"action": action, "scope": "latest_encounter", "tables": []}
-    tables = plan.get("tables")
-    if not isinstance(tables, list) or len(tables) > 5 or any(
-        not isinstance(table, str) or table not in available for table in tables
-    ):
-        raise ValueError(f"Unavailable tables in route plan: {tables}")
+    if action == "analysis":
+        if "measurement" not in available:
+            return {"action": "unsupported", "scope": "latest_encounter", "tables": []}
+        tables = ["measurement"]
+    else:
+        tables = plan.get("tables")
+        if not isinstance(tables, list) or len(tables) > 5 or any(
+            not isinstance(table, str) or table not in available for table in tables
+        ):
+            raise ValueError(f"Unavailable tables in route plan: {tables}")
     scope = plan.get("scope")
     if re.search(r"\b(visits|encounters|history|earlier|previous)\b", request, re.I):
         scope = "history"
@@ -160,13 +170,18 @@ def select_action_plan(model: PreTrainedModel,
         system=(
             "You navigate one patient's OMOP data. Return only JSON with keys "
             "action, scope, tables, concept_ids, ancestor_ids. Actions: records, time_series, "
-            "distribution, statistics, unsupported. Use records to show source rows; "
+            "distribution, statistics, unsupported. Never return the generic action analysis. "
+            "Choose time_series for numeric measurements over time even when the "
+            "question only says show or see. Use records to show source rows; "
             "use an analysis action only for numeric measurement requests. "
             "The analysis actions calculate values directly from recorded measurements; "
             "they cannot derive rates or perform unit conversions. Choose unsupported "
             "when the requested calculation needs either. Choose concept_ids only from "
-            "the supplied patient-specific candidates. Leave both concept_ids and "
-            "ancestor_ids empty only when the user explicitly asks about all "
+            "the supplied patient-specific candidates. Candidates include row_count "
+            "across patient history and scope_row_count in the requested time scope. "
+            "A selected concept with scope_row_count zero will have no rows to "
+            "analyze in that scope. Leave both concept_ids and ancestor_ids empty "
+            "only when the user explicitly asks about all "
             "measurements; for a named measurement with no matching candidate "
             "or group choose unsupported. You may also select "
             "ancestor_ids from the supplied patient-specific ancestor groups to "
@@ -178,7 +193,7 @@ def select_action_plan(model: PreTrainedModel,
             "patient or person. Choose latest_encounter unless the question asks for history, earlier "
             "encounters, or a comparison across encounters. Use history for a list "
             "of visits. Choose tables only from the supplied list, at most five. "
-            "Analysis actions use the measurement table. Never generate SQL or Python."
+            "Analysis actions use only the measurement table. Never generate SQL or Python."
         ),
         user=f"Available tables: {json.dumps(available)}\n"
              f"Measurement candidates: {json.dumps(candidates)}\n"
@@ -196,6 +211,29 @@ def select_action_plan(model: PreTrainedModel,
     tables = plan.get("tables")
     concept_ids = plan.get("concept_ids")
     ancestor_ids = plan.get("ancestor_ids", [])
+    if action == "analysis":
+        kind_response = generate(
+            model=model, tokenizer=tokenizer,
+            system=(
+                "Choose the exact operation for this one-patient measurement request. "
+                "Return only JSON with action set to exactly one of time_series, "
+                "distribution, statistics, or unsupported. Use statistics for "
+                "requested summary numbers, distribution for value frequencies, "
+                "and time_series for values over time."
+            ),
+            user=f"Question: {request}\nDraft plan: {json.dumps(plan)}",
+            max_new_tokens=64,
+        )
+        kind_match = re.search(r"\{[\s\S]*\}", kind_response)
+        try:
+            kind_plan = json.loads(kind_match.group()) if kind_match else None
+        except json.JSONDecodeError:
+            kind_plan = None
+        kind = kind_plan.get("action") if isinstance(kind_plan, dict) else None
+        if kind not in (*ANALYSIS_KINDS, "unsupported"):
+            return {"action": "unsupported", "reason":
+                    "Could not determine the requested measurement analysis type."}
+        action = kind
     if action not in ("records", *ANALYSIS_KINDS, "unsupported"):
         raise ValueError(f"Unsupported action: {action}")
     if action == "unsupported":
@@ -544,12 +582,27 @@ def run_patient_request(person_id: int, request: str, data_dir: str,
                 "evidence": [], "analysis": None, "decision_trace": trace}
     plan = {**route, "concept_ids": [], "ancestor_ids": []}
     concept_selection = None
+    scoped_measurement_rows = None
     if "measurement" in route["tables"]:
         measurement_rows = patient_table(data_dir, "measurement", person_id, "history", None)
+        encounter = (latest_encounter(data_dir, person_id)
+                     if route["scope"] == "latest_encounter" else None)
+        if route["scope"] == "latest_encounter" and encounter is None:
+            raise ValueError(f"person_id {person_id} has no VISIT_OCCURRENCE record")
+        scoped_measurement_rows = patient_table(
+            data_dir, "measurement", person_id, route["scope"], encounter)
+        scope_counts = pd.to_numeric(
+            scoped_measurement_rows["measurement_concept_id"], errors="coerce"
+        ).value_counts()
         candidates = measurement_catalog(measurement_rows, concept_names, request)
+        candidates = [
+            {**item, "scope_row_count": int(scope_counts.get(item["concept_id"], 0))}
+            for item in candidates
+        ]
         ancestor_candidates = measurement_ancestor_catalog(
             measurement_rows, concept_names, load_measurement_ancestors(data_dir), request)
         concept_selection = {
+            "scope": route["scope"],
             "candidates": candidates,
             "ancestor_candidates": [
                 {"ancestor_id": item["ancestor_id"], "name": item["name"],
@@ -572,6 +625,14 @@ def run_patient_request(person_id: int, request: str, data_dir: str,
                     "concept_selection": concept_selection}
         plan["concept_ids"] = selection["concept_ids"]
         plan["ancestor_ids"] = selection["ancestor_ids"]
+        if route["action"] == "analysis":
+            if selection["action"] not in ANALYSIS_KINDS:
+                reason = "Could not determine the requested measurement analysis type."
+                trace.append({"stage": "Validation", "detail": reason})
+                return {"kind": "unsupported", "answer": reason,
+                        "evidence": [], "analysis": None, "decision_trace": trace,
+                        "concept_selection": concept_selection}
+            plan["action"] = selection["action"]
         counts = pd.to_numeric(measurement_rows["measurement_concept_id"], errors="coerce").value_counts()
         candidate_by_id = {item["concept_id"]: item for item in candidates}
         direct_ids = set(selection["direct_concept_ids"])
@@ -580,6 +641,7 @@ def run_patient_request(person_id: int, request: str, data_dir: str,
              "name": candidate_by_id[concept_id]["name"] if concept_id in candidate_by_id
                      else concept_names.get(concept_id, str(concept_id)),
              "row_count": int(counts.get(concept_id, 0)),
+             "scope_row_count": int(scope_counts.get(concept_id, 0)),
              "source": "direct" if concept_id in direct_ids else "ancestor"}
             for concept_id in plan["concept_ids"]
         ]
@@ -592,7 +654,7 @@ def run_patient_request(person_id: int, request: str, data_dir: str,
             "selected" if plan["concept_ids"] else "all_measurements"
         )
         trace.append({"stage": "Model concept selection", "detail":
-                      f"Concepts: {', '.join(f'{concept_id} ({concept_names.get(concept_id, "unknown")})' for concept_id in plan['concept_ids']) or 'none'}; "
+                      f"Action: {plan['action']}; concepts: {', '.join(f'{concept_id} ({concept_names.get(concept_id, "unknown")})' for concept_id in plan['concept_ids']) or 'none'}; "
                       f"ancestors: {', '.join(f'{ancestor_id} ({concept_names.get(ancestor_id, "unknown")})' for ancestor_id in plan['ancestor_ids']) or 'none'}."})
     action = plan["action"]
     trace.append({"stage": "Validation", "detail": "Selected patient data and operation passed validation."})
@@ -625,10 +687,12 @@ def run_patient_request(person_id: int, request: str, data_dir: str,
                 "analysis": None, "decision_trace": trace,
                 "concept_selection": concept_selection}
 
-    encounter = latest_encounter(data_dir, person_id) if plan["scope"] == "latest_encounter" else None
-    if plan["scope"] == "latest_encounter" and encounter is None:
-        raise ValueError(f"person_id {person_id} has no VISIT_OCCURRENCE record")
-    rows = patient_table(data_dir, "measurement", person_id, plan["scope"], encounter)
+    extra_tables = [table for table in plan["tables"] if table != "measurement"]
+    if extra_tables:
+        trace.append({"stage": "Analysis source", "detail":
+                      "Numeric analysis uses measurement records only; "
+                      f"{', '.join(extra_tables)} was not analyzed."})
+    rows = scoped_measurement_rows
     result = analyze_measurements(rows, concept_names, plan["concept_ids"], action,
                                   plan["scope"])
     result["ancestor_ids"] = plan["ancestor_ids"]
@@ -645,6 +709,15 @@ def run_patient_request(person_id: int, request: str, data_dir: str,
         answer = f"Found {result['source_rows']} matching measurement records across {len(result['series'])} concept and unit groups."
     else:
         answer = "No matching measurement records were found for this patient and time scope."
+    if concept_selection and concept_selection["selection_mode"] == "selected":
+        missing = [item for item in concept_selection["selected_concepts"]
+                   if item["scope_row_count"] == 0]
+        if missing:
+            scope_label = ("the latest encounter" if plan["scope"] == "latest_encounter"
+                           else "the requested history")
+            concept_word = "concept" if len(missing) == 1 else "concepts"
+            answer += (f" {len(missing)} selected {concept_word} had no measurement "
+                       f"records in {scope_label}; see the concept selection panel.")
     trace.append({"stage": "Analysis", "detail":
                   f"Computed {action} from {result['source_rows']} source rows; "
                   f"{len(result['series'])} concept and unit groups."})

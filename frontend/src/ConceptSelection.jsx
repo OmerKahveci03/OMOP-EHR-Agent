@@ -1,12 +1,15 @@
-function ConceptItem({ concept, selected = false, source }) {
+function ConceptItem({ concept, selected = false, source, scopeLabel }) {
+  const unavailable = selected && concept.scope_row_count === 0
   return (
-    <li className={`concept-item${selected ? ' selected' : ''}`}>
+    <li className={`concept-item${selected ? ' selected' : ''}${unavailable ? ' unavailable' : ''}`}>
       <span className="concept-item-name">{concept.name}</span>
       <span className="concept-item-meta">
         <code>{concept.concept_id}</code>
-        <span>{concept.row_count} patient records</span>
+        <span>{concept.scope_row_count ?? concept.row_count} in {scopeLabel}</span>
+        {scopeLabel !== 'history' && <span>{concept.row_count} in history</span>}
         {source && <span className="concept-source">{source === 'ancestor' ? 'via ancestor' : 'direct'}</span>}
         {selected && !source && <span className="concept-source">selected</span>}
+        {unavailable && <span className="concept-unavailable">no rows in scope</span>}
       </span>
     </li>
   )
@@ -15,6 +18,8 @@ function ConceptItem({ concept, selected = false, source }) {
 export default function ConceptSelection({ selection }) {
   const selectedIds = new Set(selection.selected_concepts.map((concept) => concept.concept_id))
   const selectedAncestorIds = new Set(selection.selected_ancestors.map((ancestor) => ancestor.ancestor_id))
+  const scopeLabel = selection.scope === 'latest_encounter' ? 'latest encounter' : 'history'
+  const availableCount = selection.selected_concepts.filter((concept) => concept.scope_row_count > 0).length
 
   return (
     <aside className="concept-sidebar" aria-labelledby="concept-sidebar-title">
@@ -22,9 +27,12 @@ export default function ConceptSelection({ selection }) {
       <p className="concept-sidebar-intro">Patient measurement concepts considered for this question.</p>
 
       <div className="concept-sidebar-section">
-        <h4>Used for this result</h4>
+        <h4>Selected by the model</h4>
         {selection.selection_mode === 'all_measurements' && <p>All patient measurements; no concept filter was applied.</p>}
         {selection.selection_mode === 'none' && <p>No measurement concepts were selected.</p>}
+        {selection.selected_concepts.length > 0 && availableCount < selection.selected_concepts.length && (
+          <p className="concept-scope-note">{availableCount} of {selection.selected_concepts.length} selected concepts have measurement records in the {scopeLabel}.</p>
+        )}
         {selection.selected_ancestors.length > 0 && (
           <div className="concept-ancestor-selection">
             <span>Selected ancestor groups</span>
@@ -38,7 +46,7 @@ export default function ConceptSelection({ selection }) {
         {selection.selected_concepts.length > 0 && (
           <ul className="concept-list selected-list">
             {selection.selected_concepts.map((concept) => (
-              <ConceptItem concept={concept} source={concept.source} selected key={concept.concept_id} />
+              <ConceptItem concept={concept} source={concept.source} scopeLabel={scopeLabel} selected key={concept.concept_id} />
             ))}
           </ul>
         )}
@@ -46,11 +54,11 @@ export default function ConceptSelection({ selection }) {
 
       <div className="concept-sidebar-section">
         <h4>Candidate concepts <span>({selection.candidates.length} shown)</span></h4>
-        <p>Ranked from this patient’s measurement history; the shortlist is capped at 40.</p>
+        <p>Ranked from this patient’s measurement history; counts in the {scopeLabel} are shown below. The shortlist is capped at 40.</p>
         {selection.candidates.length > 0 ? (
           <ul className="concept-list candidate-list">
             {selection.candidates.map((concept) => (
-              <ConceptItem concept={concept} selected={selectedIds.has(concept.concept_id)} key={concept.concept_id} />
+              <ConceptItem concept={concept} selected={selectedIds.has(concept.concept_id)} scopeLabel={scopeLabel} key={concept.concept_id} />
             ))}
           </ul>
         ) : <p>No candidate measurement concepts were found.</p>}

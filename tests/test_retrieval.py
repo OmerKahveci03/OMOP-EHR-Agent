@@ -138,6 +138,35 @@ class RetrievalTests(unittest.TestCase):
             plan = select_action_plan(model, Tokenizer(), "statistics", ["measurement"], candidates)
         self.assertEqual(plan["concept_ids"], list(range(300, 310)))
 
+    def test_generic_analysis_plan_asks_model_for_specific_kind(self):
+        with patch("src.hipergator.patient_search.generate", side_effect=[
+            '{"action":"analysis","scope":"latest_encounter",'
+            '"tables":["measurement"],"concept_ids":[300]}',
+            '{"action":"statistics"}',
+        ]) as generate:
+            plan = select_action_plan(SimpleNamespace(), Tokenizer(),
+                                      "Count and median glucose measurements",
+                                      ["measurement"], [{"concept_id": 300, "name": "Glucose"}])
+        self.assertEqual(plan["action"], "statistics")
+        self.assertEqual(plan["concept_ids"], [300])
+        self.assertEqual(generate.call_count, 2)
+
+    def test_generic_analysis_route_uses_selected_statistics_kind(self):
+        question = ("For the latest encounter, what are the count, minimum, median, "
+                    "maximum, and standard deviation of this patient's glucose measurements?")
+        with patch("src.hipergator.patient_search.generate", side_effect=[
+            '{"action":"analysis","scope":"latest_encounter"}',
+            '{"action":"statistics","scope":"latest_encounter",'
+            '"tables":["measurement"],"concept_ids":[300]}',
+        ]) as generate:
+            result = run_patient_request(7, question, self.directory.name,
+                                         SimpleNamespace(), Tokenizer(), {300: "Glucose"})
+        self.assertEqual(result["kind"], "statistics")
+        self.assertEqual(result["analysis"]["series"][0]["stats"]["count"], 2)
+        self.assertEqual(result["concept_selection"]["selected_concepts"][0]["concept_id"], 300)
+        self.assertIn("Action: statistics", result["decision_trace"][2]["detail"])
+        self.assertEqual(generate.call_count, 2)
+
     def test_action_plan_expands_only_patient_descendants_of_selected_ancestor(self):
         ancestor_options = [{"ancestor_id": 100, "name": "Example family",
                              "patient_descendant_count": 2,
@@ -287,7 +316,7 @@ class RetrievalTests(unittest.TestCase):
             '{"action":"time_series","scope":"latest_encounter",'
             '"tables":["measurement"],"concept_ids":[300]}'
         ]):
-            result = run_patient_request(7, "plot Example during latest encounter",
+            result = run_patient_request(7, "show Example over time during latest encounter",
                                          self.directory.name, model, Tokenizer(),
                                          {300: "Example"})
         self.assertEqual(result["kind"], "time_series")
@@ -295,9 +324,42 @@ class RetrievalTests(unittest.TestCase):
         self.assertEqual(len(result["analysis"]["series"][0]["points"]), 2)
         selection = result["concept_selection"]
         self.assertEqual(selection["selected_concepts"], [
-            {"concept_id": 300, "name": "Example", "row_count": 3, "source": "direct"}
+            {"concept_id": 300, "name": "Example", "row_count": 3,
+             "scope_row_count": 2, "source": "direct"}
         ])
         self.assertEqual({item["concept_id"] for item in selection["candidates"]}, {300, 301})
+
+    def test_selected_history_only_concept_is_explained_when_latest_scope_has_no_rows(self):
+        path = Path(self.directory.name) / "measurement.parquet"
+        rows = pd.read_parquet(path)
+        history_only = rows.iloc[0].copy()
+        history_only["measurement_id"] = 5
+        history_only["measurement_concept_id"] = 302
+        history_only["measurement_source_value"] = "Invasive blood pressure"
+        rows = pd.concat([rows, history_only.to_frame().T], ignore_index=True)
+        rows.to_parquet(path)
+        pd.DataFrame([{"person_id": 7, "observation_id": 6}]).to_parquet(
+            Path(self.directory.name) / "observation.parquet")
+        with patch("src.hipergator.patient_search.generate", side_effect=[
+            '{"action":"time_series","scope":"latest_encounter",'
+            '"tables":["measurement","observation"]}',
+            '{"action":"time_series","scope":"latest_encounter",'
+            '"tables":["measurement"],"concept_ids":[300,302]}',
+        ]):
+            result = run_patient_request(
+                7, "Show invasive and noninvasive blood pressure over time in the latest encounter",
+                self.directory.name, SimpleNamespace(), Tokenizer(),
+                {300: "Noninvasive blood pressure", 302: "Invasive blood pressure"},
+            )
+        self.assertEqual(result["analysis"]["source_rows"], 2)
+        self.assertEqual(len(result["analysis"]["series"]), 1)
+        selected = {item["concept_id"]: item for item in result["concept_selection"]["selected_concepts"]}
+        self.assertEqual(selected[302]["row_count"], 1)
+        self.assertEqual(selected[302]["scope_row_count"], 0)
+        self.assertEqual(selected[300]["scope_row_count"], 2)
+        self.assertIn("1 selected concept had no measurement records in the latest encounter", result["answer"])
+        self.assertTrue(any("observation was not analyzed" in step["detail"]
+                            for step in result["decision_trace"]))
 
     def test_action_route_returns_filtered_source_records(self):
         model = SimpleNamespace(config=SimpleNamespace(max_position_embeddings=16384))
