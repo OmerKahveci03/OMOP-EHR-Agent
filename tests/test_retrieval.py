@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
+from src.hipergator.concepts import load_measurement_ancestors
 from src.hipergator.patient_search import (
     run_patient_request, search_patient, select_action_plan, select_retrieval_plan,
 )
@@ -58,6 +59,11 @@ class RetrievalTests(unittest.TestCase):
             {"ancestor_concept_id": 100, "descendant_concept_id": 300},
             {"ancestor_concept_id": 100, "descendant_concept_id": 301},
         ]).to_parquet(root / "measurement_concept_ancestor.parquet")
+
+    def test_missing_measurement_ancestor_index_has_actionable_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(FileNotFoundError, "Run python -u -m src.hipergator.preprocess"):
+                load_measurement_ancestors(directory)
 
     def test_latest_visit_and_measurement_summary(self):
         encounter = latest_encounter(self.directory.name, 7)

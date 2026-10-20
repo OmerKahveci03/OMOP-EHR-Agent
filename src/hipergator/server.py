@@ -88,6 +88,9 @@ def create_app(model_path: str = LLAMA_PATH) -> Flask:
 
         except ValueError as exc:
             return jsonify(error=str(exc)), 404 if "was not found" in str(exc) else 400
+        except FileNotFoundError as exc:
+            app.logger.error("Search data is missing: %s", exc)
+            return jsonify(error=str(exc)), 503
 
         return jsonify(result)
 

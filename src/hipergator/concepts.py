@@ -21,6 +21,11 @@ def load_concept_names(data_dir: str) -> dict[int, str]:
 def load_measurement_ancestors(data_dir: str) -> dict[int, set[int]]:
     """Load the compact hierarchy index built from recorded measurements."""
     path = os.path.join(data_dir, "measurement_concept_ancestor.parquet")
+    if not os.path.isfile(path):
+        raise FileNotFoundError(
+            f"Missing measurement ancestor index: {path}. "
+            "Run python -u -m src.hipergator.preprocess, then restart the server."
+        )
     links = pd.read_parquet(path, columns=["ancestor_concept_id", "descendant_concept_id"])
     return {
         int(ancestor_id): set(group["descendant_concept_id"].astype(int))
