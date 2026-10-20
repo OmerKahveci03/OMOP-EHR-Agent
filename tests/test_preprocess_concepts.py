@@ -26,6 +26,9 @@ class ConceptPreprocessTests(unittest.TestCase):
             (raw / "person.csv").write_text(
                 "person_id,year_of_birth\n7,1980\n", encoding="utf-8"
             )
+            (raw / "measurement.csv").write_text(
+                "person_id,measurement_concept_id\n7,456\n", encoding="utf-8"
+            )
             (athena / "CONCEPT.csv").write_text(
                 "concept_id\tconcept_name\n456\tCreatinine\n", encoding="utf-8"
             )
@@ -40,6 +43,9 @@ class ConceptPreprocessTests(unittest.TestCase):
             ancestors = pd.read_parquet(root / "cleaned_data" / "concept_ancestor.parquet")
             self.assertEqual(ancestors.iloc[0].tolist(), [123, 456, 1, 2])
             self.assertTrue(pd.api.types.is_integer_dtype(ancestors["descendant_concept_id"]))
+            measurement_ancestors = pd.read_parquet(
+                root / "cleaned_data" / "measurement_concept_ancestor.parquet")
+            self.assertEqual(measurement_ancestors.iloc[0].tolist(), [123, 456])
             self.assertTrue((root / "cleaned_data" / "person.parquet").exists())
             self.assertTrue((root / "cleaned_data" / "metadata" / "metadata_master.csv").exists())
 

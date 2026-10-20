@@ -22,7 +22,7 @@ def analyze_dataset(base_dir: str = HPG_BASE_DIR) -> list[str]:
     # --- Summarize each table ---
     workbook_paths: list[str] = []
     for parquet_file in parquet_files:
-        if parquet_file.stem in {"concept", "concept_ancestor"}:
+        if parquet_file.stem in {"concept", "concept_ancestor", "measurement_concept_ancestor"}:
             continue  # Vocabulary lookup table, not a patient dataset.
         df: pd.DataFrame = pd.read_parquet(path=parquet_file)
         concept_columns: list[str] = [

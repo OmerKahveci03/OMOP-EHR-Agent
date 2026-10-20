@@ -137,6 +137,56 @@ def preprocess_concept_ancestor(source_file: str, write_dir: str,
     return True
 
 
+def preprocess_measurement_ancestors(cleaned_dir: str, meta_dir: str,
+                                     overwrite: bool = False) -> bool:
+    """Index ancestor links for concepts present in the measurement table."""
+    measurement_fp = os.path.join(cleaned_dir, "measurement.parquet")
+    ancestor_fp = os.path.join(cleaned_dir, "concept_ancestor.parquet")
+    write_fp = os.path.join(cleaned_dir, "measurement_concept_ancestor.parquet")
+    marker_fp = os.path.join(meta_dir, "measurement_concept_ancestor_sources.json")
+    sources = {
+        name: {"size": os.path.getsize(path), "mtime_ns": os.stat(path).st_mtime_ns}
+        for name, path in (("measurement", measurement_fp), ("ancestor", ancestor_fp))
+    }
+    if not overwrite and os.path.exists(write_fp) and os.path.exists(marker_fp):
+        with open(marker_fp, encoding="utf-8") as marker:
+            if json.load(marker) == sources:
+                return False
+
+    measurement_ids = set(pd.to_numeric(
+        pd.read_parquet(measurement_fp, columns=["measurement_concept_id"])["measurement_concept_id"],
+        errors="coerce").dropna().astype("int64"))
+    columns = ["ancestor_concept_id", "descendant_concept_id"]
+    schema = pa.schema([pa.field(column, pa.int64()) for column in columns])
+    part_fp = f"{write_fp}.part"
+    writer = pq.ParquetWriter(part_fp, schema=schema, compression="snappy")
+    row_count = 0
+    try:
+        for batch in pq.ParquetFile(ancestor_fp).iter_batches(
+            batch_size=100_000, columns=[*columns, "min_levels_of_separation"]
+        ):
+            chunk = batch.to_pandas()
+            relevant = chunk[
+                chunk["descendant_concept_id"].isin(measurement_ids)
+                & (chunk["min_levels_of_separation"] > 0)
+            ][columns]
+            if not relevant.empty:
+                writer.write_table(pa.Table.from_pandas(
+                    relevant, schema=schema, preserve_index=False))
+                row_count += len(relevant)
+    except BaseException:
+        writer.close()
+        if os.path.exists(part_fp):
+            os.remove(part_fp)
+        raise
+    writer.close()
+    os.replace(part_fp, write_fp)
+    with open(marker_fp, "w", encoding="utf-8") as marker:
+        json.dump(sources, marker)
+    print(f" - Indexed {row_count} patient measurement ancestor links")
+    return True
+
+
 def raw_csv_to_parquet(raw_file: str, write_dir: str, meta_dir: str, overwrite: bool) -> None:
     """ Load the raw csv file and write to the `write_dir` as a parquet.
     
@@ -229,6 +279,8 @@ def preprocess_data(base_dir: str = HPG_BASE_DIR, max_workers: Optional[int] = N
         source_file=athena_ancestors, write_dir=cleaned_dir,
         meta_dir=meta_dir, overwrite=overwrite,
     )
+    if os.path.isfile(os.path.join(cleaned_dir, "measurement.parquet")):
+        preprocess_measurement_ancestors(cleaned_dir, meta_dir, overwrite)
 
     print("\nDone preprocessing data!\n")
 

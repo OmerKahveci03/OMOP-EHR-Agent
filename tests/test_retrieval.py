@@ -54,6 +54,10 @@ class RetrievalTests(unittest.TestCase):
              "unit_source_value": None, "value_as_number": None,
              "value_as_concept_id": 500, "value_source_value": "Positive"},
         ]).to_parquet(root / "measurement.parquet")
+        pd.DataFrame([
+            {"ancestor_concept_id": 100, "descendant_concept_id": 300},
+            {"ancestor_concept_id": 100, "descendant_concept_id": 301},
+        ]).to_parquet(root / "measurement_concept_ancestor.parquet")
 
     def test_latest_visit_and_measurement_summary(self):
         encounter = latest_encounter(self.directory.name, 7)
@@ -127,6 +131,32 @@ class RetrievalTests(unittest.TestCase):
         )):
             plan = select_action_plan(model, Tokenizer(), "statistics", ["measurement"], candidates)
         self.assertEqual(plan["concept_ids"], list(range(300, 310)))
+
+    def test_action_plan_expands_only_patient_descendants_of_selected_ancestor(self):
+        ancestor_options = [{"ancestor_id": 100, "name": "Example family",
+                             "patient_descendant_count": 2,
+                             "descendant_ids": [300, 301]}]
+        with patch("src.hipergator.patient_search.generate", return_value=(
+            '{"action":"statistics","scope":"history",'
+            '"tables":["measurement"],"concept_ids":[],"ancestor_ids":["100"]}'
+        )):
+            plan = select_action_plan(SimpleNamespace(), Tokenizer(), "Example family stats",
+                                      ["measurement"], [], ancestor_options)
+        self.assertEqual(plan["concept_ids"], [300, 301])
+        self.assertEqual(plan["ancestor_ids"], [100])
+
+    def test_action_route_uses_ancestor_catalog(self):
+        with patch("src.hipergator.patient_search.generate", return_value=(
+            '{"action":"statistics","scope":"latest_encounter",'
+            '"tables":["measurement"],"concept_ids":[],"ancestor_ids":[100]}'
+        )) as generate:
+            result = run_patient_request(
+                7, "Example family statistics", self.directory.name,
+                SimpleNamespace(), Tokenizer(), {100: "Example family", 300: "Example"},
+            )
+        self.assertEqual(result["analysis"]["concept_ids"], [300, 301])
+        self.assertEqual(result["analysis"]["ancestor_ids"], [100])
+        self.assertIn('"ancestor_id": 100', generate.call_args.kwargs["user"])
 
     def test_action_plan_handles_patient_as_time_scope(self):
         model = SimpleNamespace()

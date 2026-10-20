@@ -13,8 +13,9 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenize
 from transformers.tokenization_utils_base import BatchEncoding
 
 from . import LLAMA_PATH
-from .analysis import ANALYSIS_KINDS, analyze_measurements, measurement_catalog
-from .concepts import add_concept_names, load_concept_names
+from .analysis import (ANALYSIS_KINDS, analyze_measurements,
+                       measurement_ancestor_catalog, measurement_catalog)
+from .concepts import add_concept_names, load_concept_names, load_measurement_ancestors
 from .retrieval import json_records, latest_encounter, patient_table, summarize_measurements
 from .utils.paths import get_path
 from .utils.types import RowsKeys, ScopeType, SCOPE_VALUES
@@ -101,21 +102,31 @@ def select_retrieval_plan(model: PreTrainedModel,
 def select_action_plan(model: PreTrainedModel,
                        tokenizer: PreTrainedTokenizerBase,
                        request: str, available: list[str],
-                       candidates: list[dict]) -> dict:
+                       candidates: list[dict],
+                       ancestor_candidates: list[dict] | None = None) -> dict:
     """Choose a validated patient-scoped retrieval or measurement operation."""
+    ancestor_choices = [
+        {"ancestor_id": item["ancestor_id"], "name": item["name"],
+         "patient_descendant_count": item["patient_descendant_count"]}
+        for item in (ancestor_candidates or [])
+    ]
     response = generate(
         model=model, tokenizer=tokenizer,
         system=(
             "You navigate one patient's OMOP data. Return only JSON with keys "
-            "action, scope, tables, concept_ids. Actions: records, time_series, "
+            "action, scope, tables, concept_ids, ancestor_ids. Actions: records, time_series, "
             "distribution, statistics, unsupported. Use records to show source rows; "
             "use an analysis action only for numeric measurement requests. "
             "The analysis actions calculate values directly from recorded measurements; "
             "they cannot derive rates or perform unit conversions. Choose unsupported "
             "when the requested calculation needs either. Choose concept_ids only from "
-            "the supplied patient-specific candidates. Use [] only when the user "
-            "explicitly asks about all measurements; for a named measurement "
-            "with no matching candidate choose unsupported. Select all and only "
+            "the supplied patient-specific candidates. Leave both concept_ids and "
+            "ancestor_ids empty only when the user explicitly asks about all "
+            "measurements; for a named measurement with no matching candidate "
+            "or group choose unsupported. You may also select "
+            "ancestor_ids from the supplied patient-specific ancestor groups to "
+            "include their recorded descendants. Use a group only when all its "
+            "descendants fit the question. Select all and only "
             "the candidates relevant to the question, regardless of how many "
             "there are. Write concept IDs as JSON integers, not strings. "
             "Scope means time only: use exactly latest_encounter or history, never "
@@ -125,7 +136,8 @@ def select_action_plan(model: PreTrainedModel,
             "Analysis actions use the measurement table. Never generate SQL or Python."
         ),
         user=f"Available tables: {json.dumps(available)}\n"
-             f"Measurement candidates: {json.dumps(candidates)}\nQuestion: {request}",
+             f"Measurement candidates: {json.dumps(candidates)}\n"
+             f"Ancestor groups: {json.dumps(ancestor_choices)}\nQuestion: {request}",
         max_new_tokens=256,
     )
     match = re.search(r"\{[\s\S]*\}", response)
@@ -138,6 +150,7 @@ def select_action_plan(model: PreTrainedModel,
     scope = plan.get("scope")
     tables = plan.get("tables")
     concept_ids = plan.get("concept_ids")
+    ancestor_ids = plan.get("ancestor_ids", [])
     if action not in ("records", *ANALYSIS_KINDS, "unsupported"):
         raise ValueError(f"Unsupported action: {action}")
     if action == "unsupported":
@@ -168,11 +181,27 @@ def select_action_plan(model: PreTrainedModel,
             return {"action": "unsupported", "reason": "Could not identify the requested measurement concepts."}
         parsed_ids.append(parsed_id)
     parsed_ids = list(dict.fromkeys(parsed_ids))
+    if not isinstance(ancestor_ids, list):
+        ancestor_ids = []
+    ancestor_options = {item["ancestor_id"]: item["descendant_ids"]
+                        for item in (ancestor_candidates or [])}
+    selected_ancestors: list[int] = []
+    for ancestor_id in ancestor_ids:
+        if isinstance(ancestor_id, bool) or not (
+            isinstance(ancestor_id, int) or
+            isinstance(ancestor_id, str) and re.fullmatch(r"-?\d+", ancestor_id.strip())
+        ) or int(ancestor_id) not in ancestor_options:
+            return {"action": "unsupported", "reason":
+                    "Could not identify the requested measurement ancestor group."}
+        selected_ancestors.append(int(ancestor_id))
+        parsed_ids.extend(ancestor_options[int(ancestor_id)])
+    parsed_ids = list(dict.fromkeys(parsed_ids))
     if action in ANALYSIS_KINDS and "measurement" not in available:
         raise ValueError("Measurement table is unavailable")
     return {"action": action, "scope": scope,
             "tables": list(dict.fromkeys(tables)),
-            "concept_ids": parsed_ids}
+            "concept_ids": parsed_ids,
+            "ancestor_ids": list(dict.fromkeys(selected_ancestors))}
 
 
 def patient_rows(data_dir: str, table: str, 
@@ -356,7 +385,13 @@ def run_patient_request(person_id: int, request: str, data_dir: str,
         if "measurement" in available else pd.DataFrame()
     )
     candidates = measurement_catalog(measurement_rows, concept_names, request)
-    plan = select_action_plan(model, tokenizer, request, available, candidates)
+    ancestor_candidates = (
+        measurement_ancestor_catalog(
+            measurement_rows, concept_names, load_measurement_ancestors(data_dir), request)
+        if "measurement" in available else []
+    )
+    plan = select_action_plan(model, tokenizer, request, available, candidates,
+                              ancestor_candidates)
     action = plan["action"]
     if action == "unsupported":
         return {"kind": "unsupported", "answer":
@@ -380,6 +415,7 @@ def run_patient_request(person_id: int, request: str, data_dir: str,
     rows = patient_table(data_dir, "measurement", person_id, plan["scope"], encounter)
     result = analyze_measurements(rows, concept_names, plan["concept_ids"], action,
                                   plan["scope"])
+    result["ancestor_ids"] = plan["ancestor_ids"]
     matched = rows
     if plan["concept_ids"]:
         ids = pd.to_numeric(rows["measurement_concept_id"], errors="coerce")

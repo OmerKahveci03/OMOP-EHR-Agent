@@ -20,3 +20,5 @@ OMOP concepts were downloaded from [OHDSI Athena](https://athena.ohdsi.org/)
 to `$HPG_BASE_DIR/vocabulary_download_v5/CONCEPT.csv`. Preprocessing combines
 them with MIMIC's local concepts in `cleaned_data/concept.parquet`.
 `CONCEPT_ANCESTOR.csv` becomes `cleaned_data/concept_ancestor.parquet`.
+Preprocessing also indexes ancestor links for recorded measurements in
+`cleaned_data/measurement_concept_ancestor.parquet`.

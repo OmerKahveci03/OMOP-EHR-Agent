@@ -41,6 +41,40 @@ def measurement_catalog(rows: pd.DataFrame, names: dict[int, str], request: str,
     return sorted(entries, key=rank, reverse=True)[:limit]
 
 
+def measurement_ancestor_catalog(rows: pd.DataFrame, names: dict[int, str],
+                                 ancestor_links: dict[int, set[int]],
+                                 request: str, limit: int = 20) -> list[dict]:
+    """Offer named ancestors whose descendants this patient has recorded."""
+    if rows.empty or "measurement_concept_id" not in rows:
+        return []
+    patient_ids = set(pd.to_numeric(rows["measurement_concept_id"], errors="coerce")
+                      .dropna().astype(int))
+    query_words = {word for word in request.lower().replace("-", " ").split()
+                   if len(word) > 2 and word not in {
+                       "the", "this", "patient", "their", "during", "latest",
+                       "encounter", "show", "over", "time", "measurements",
+                       "results", "across", "all", "calculate", "summarize",
+                       "distribution", "statistics", "rate",
+                   }}
+    entries = []
+    for ancestor_id, descendants in ancestor_links.items():
+        matched = patient_ids & descendants
+        name = names.get(ancestor_id)
+        if not matched or not name:
+            continue
+        words = set(name.lower().replace("-", " ").split())
+        score = len(query_words & words)
+        if score:
+            entries.append({"ancestor_id": ancestor_id, "name": name,
+                            "patient_descendant_count": len(matched),
+                            "descendant_ids": sorted(matched), "_score": score})
+    entries.sort(key=lambda item: (-item["_score"], item["patient_descendant_count"],
+                                   item["name"]))
+    for item in entries[:limit]:
+        del item["_score"]
+    return entries[:limit]
+
+
 def analyze_measurements(rows: pd.DataFrame, names: dict[int, str],
                          concept_ids: list[int], kind: AnalysisKind,
                          scope: str) -> dict:

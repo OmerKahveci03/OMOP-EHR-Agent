@@ -1,6 +1,7 @@
 """Resolve OMOP concept IDs in evidence for the model and user interface."""
 
 import os
+from functools import lru_cache
 
 import pandas as pd
 
@@ -13,6 +14,17 @@ def load_concept_names(data_dir: str) -> dict[int, str]:
         int(concept_id): str(name)
         for concept_id, name in concepts.itertuples(index=False, name=None)
         if pd.notna(concept_id) and pd.notna(name)
+    }
+
+
+@lru_cache(maxsize=1)
+def load_measurement_ancestors(data_dir: str) -> dict[int, set[int]]:
+    """Load the compact hierarchy index built from recorded measurements."""
+    path = os.path.join(data_dir, "measurement_concept_ancestor.parquet")
+    links = pd.read_parquet(path, columns=["ancestor_concept_id", "descendant_concept_id"])
+    return {
+        int(ancestor_id): set(group["descendant_concept_id"].astype(int))
+        for ancestor_id, group in links.groupby("ancestor_concept_id")
     }
 
 
