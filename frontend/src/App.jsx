@@ -236,6 +236,16 @@ export default function App() {
             <span className="step">02</span>
             <h2 className="section-title" id="answer-heading">Answer</h2>
           </div>
+          {result.decision_trace?.length > 0 && <details className="decision-trace" open>
+            <summary>How the result was produced</summary>
+            <ol>
+              {result.decision_trace.map((step, index) => (
+                <li key={`${step.stage}-${index}`}>
+                  <strong>{step.stage}</strong><span>{step.detail}</span>
+                </li>
+              ))}
+            </ol>
+          </details>}
           <p className="answer">{result.answer}</p>
           <AnalysisResult analysis={result.analysis} />
           {result.evidence?.length > 0 && <details className="evidence">

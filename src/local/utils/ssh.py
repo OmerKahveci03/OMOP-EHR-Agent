@@ -186,6 +186,8 @@ def job_stdout_path(gateway: paramiko.Transport, job_id: str, repo_dir: str) -> 
 def ensure_server_job(
     gateway: paramiko.Transport, username: str, repo_dir: str,
     on_status: Callable[[str, str], None] | None = None,
+    on_job_id: Callable[[str], None] | None = None,
+    is_stopped: Callable[[], bool] | None = None,
 ) -> tuple[str, str, str]:
     """Reuse or submit the Slurm job, then wait for its compute node."""
     jobs = server_jobs(gateway, username)
@@ -197,6 +199,8 @@ def ensure_server_job(
         if on_status:
             on_status("booting", f"Using server job {job_id}.")
     else:
+        if is_stopped and is_stopped():
+            raise RuntimeError("Server startup was cancelled")
         if on_status:
             on_status("not_running", "No server job is running on HiPerGator.")
         script = posixpath.join(repo_dir, "slurm", "run_server.slurm")
@@ -212,6 +216,9 @@ def ensure_server_job(
             raise RuntimeError(f"Unexpected sbatch response: {output.strip()}")
         print(f"Submitted server job {job_id}", flush=True)
 
+    if on_job_id:
+        on_job_id(job_id)
+
     log_path = job_stdout_path(gateway, job_id, repo_dir)
     sftp = paramiko.SFTPClient.from_transport(gateway)
     try:
@@ -221,6 +228,8 @@ def ensure_server_job(
         submitted_at = time.monotonic()
         last_report = 0.0
         while time.monotonic() < deadline:
+            if is_stopped and is_stopped():
+                raise RuntimeError("Server startup was cancelled")
             matches = [job for job in server_jobs(gateway, username) if job[0] == job_id]
             offset, _ = show_server_log(sftp, log_path, offset)
             if not matches:

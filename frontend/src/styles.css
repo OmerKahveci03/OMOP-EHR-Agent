@@ -273,6 +273,37 @@
     &.result {
       margin-top: 22px;
 
+      .decision-trace {
+        margin-bottom: 20px;
+        padding: 14px 18px;
+        border: 1px solid #e3eae6;
+        border-radius: 10px;
+        background: #f7faf8;
+
+        summary {
+          color: #246e58;
+          font-weight: 700;
+          cursor: pointer;
+        }
+
+        ol {
+          margin: 12px 0 0;
+          padding-left: 22px;
+        }
+
+        li {
+          margin-top: 9px;
+          color: #526b62;
+          line-height: 1.5;
+          overflow-wrap: anywhere;
+        }
+
+        li strong {
+          display: block;
+          color: #23433d;
+        }
+      }
+
       .answer {
         margin: 0 0 26px;
         color: #23433d;

@@ -269,7 +269,8 @@ def search_patient(person_id: int, request: str,
                    concept_names: dict[int, str],
                    retrieval_plan: tuple[list[str], ScopeType] | None = None,
                    measurement_concept_ids: list[int] | None = None,
-                   include_measurement_rows: bool = False) -> tuple[str, list[dict]]:
+                   include_measurement_rows: bool = False,
+                   generate_answer: bool = True) -> tuple[str, list[dict]]:
     """ Given a patient and natural language request, return EHR. """
 
     # --- Sanity Check ---
@@ -344,6 +345,11 @@ def search_patient(person_id: int, request: str,
     # before fitting so the names count toward the model's context limit.
     evidence: list[dict] = add_concept_names(evidence=evidence, names=concept_names)
 
+    if not generate_answer:
+        counts = ", ".join(f"{item['table']}: {item['total_rows']}"
+                           for item in evidence)
+        return f"Retrieved patient records ({counts}). Review the source rows below.", evidence
+
     context_limit: int = min(5000, model.config.max_position_embeddings - 1024)
     evidence: list[dict] = fit_evidence(evidence=evidence, 
                                         tokenizer=tokenizer, 
@@ -371,6 +377,15 @@ def search_patient(person_id: int, request: str,
     return answer, evidence
 
 
+def requires_derived_calculation(request: str) -> bool:
+    """Block requests for calculations the measurement tools cannot perform."""
+    return bool(
+        re.search(r"\b(?:calculat\w*|comput\w*|deriv\w*|estimat\w*)\b", request, re.I)
+        and re.search(r"\b(?:rate|ratio|clearance|conversion|percent(?:age)? change|difference)\b",
+                      request, re.I)
+    )
+
+
 def run_patient_request(person_id: int, request: str, data_dir: str,
                         model: PreTrainedModel, tokenizer: PreTrainedTokenizerBase,
                         concept_names: dict[int, str]) -> dict:
@@ -393,10 +408,26 @@ def run_patient_request(person_id: int, request: str, data_dir: str,
     plan = select_action_plan(model, tokenizer, request, available, candidates,
                               ancestor_candidates)
     action = plan["action"]
+    trace = [{"stage": "Candidates", "detail":
+              f"Found {len(candidates)} patient measurement concepts and "
+              f"{len(ancestor_candidates)} matching ancestor groups."},
+             {"stage": "Model plan", "detail":
+              f"Action: {action}; scope: {plan.get('scope', 'not selected')}; "
+              f"tables: {', '.join(plan.get('tables', [])) or 'none'}; "
+              f"concepts: {', '.join(f'{concept_id} ({concept_names.get(concept_id, "unknown")})' for concept_id in plan.get('concept_ids', [])) or 'none'}; "
+              f"ancestors: {', '.join(f'{ancestor_id} ({concept_names.get(ancestor_id, "unknown")})' for ancestor_id in plan.get('ancestor_ids', [])) or 'none'}."}]
+    if requires_derived_calculation(request):
+        reason = ("This request needs a derived calculation that the available "
+                  "measurement tools do not support. No rate or other value was estimated.")
+        trace.append({"stage": "Validation", "detail": reason})
+        return {"kind": "unsupported", "answer": reason,
+                "evidence": [], "analysis": None, "decision_trace": trace}
     if action == "unsupported":
-        return {"kind": "unsupported", "answer":
-                plan.get("reason", "This request needs a calculation that the available analysis tools do not support."),
-                "evidence": [], "analysis": None}
+        reason = plan.get("reason", "The requested operation is not supported by the available analysis tools.")
+        trace.append({"stage": "Validation", "detail": reason})
+        return {"kind": "unsupported", "answer": reason,
+                "evidence": [], "analysis": None, "decision_trace": trace}
+    trace.append({"stage": "Validation", "detail": "Selected patient data and operation passed validation."})
     if action == "records":
         selected = [table for table in plan["tables"] if table not in ("person", "visit_occurrence")]
         answer, evidence = search_patient(
@@ -405,9 +436,13 @@ def run_patient_request(person_id: int, request: str, data_dir: str,
             retrieval_plan=(selected, plan["scope"]),
             measurement_concept_ids=plan["concept_ids"],
             include_measurement_rows=True,
+            generate_answer=False,
         )
+        trace.append({"stage": "Retrieval", "detail": "; ".join(
+            f"{item['table']}: {item['total_rows']} rows ({len(item['shown_rows'])} shown)"
+            for item in evidence)})
         return {"kind": "records", "answer": answer, "evidence": evidence,
-                "analysis": None}
+                "analysis": None, "decision_trace": trace}
 
     encounter = latest_encounter(data_dir, person_id) if plan["scope"] == "latest_encounter" else None
     if plan["scope"] == "latest_encounter" and encounter is None:
@@ -429,7 +464,11 @@ def run_patient_request(person_id: int, request: str, data_dir: str,
         answer = f"Found {result['source_rows']} matching measurement records across {len(result['series'])} concept and unit groups."
     else:
         answer = "No matching measurement records were found for this patient and time scope."
-    return {"kind": action, "answer": answer, "evidence": evidence, "analysis": result}
+    trace.append({"stage": "Analysis", "detail":
+                  f"Computed {action} from {result['source_rows']} source rows; "
+                  f"{len(result['series'])} concept and unit groups."})
+    return {"kind": action, "answer": answer, "evidence": evidence,
+            "analysis": result, "decision_trace": trace}
 
 
 if __name__ == "__main__":

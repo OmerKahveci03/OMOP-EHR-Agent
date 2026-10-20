@@ -195,6 +195,21 @@ class RetrievalTests(unittest.TestCase):
         self.assertEqual(result["kind"], "unsupported")
         self.assertIsNone(result["analysis"])
 
+    def test_rate_calculation_cannot_fall_through_to_generated_record_answer(self):
+        with patch("src.hipergator.patient_search.generate", return_value=(
+            '{"action":"records","scope":"latest_encounter",'
+            '"tables":["measurement"],"concept_ids":[300]}'
+        )) as generate:
+            result = run_patient_request(
+                7, "Calculate this patient's urine output rate during the latest encounter",
+                self.directory.name, SimpleNamespace(), Tokenizer(), {300: "Creatinine"},
+            )
+        self.assertEqual(result["kind"], "unsupported")
+        self.assertIn("No rate or other value was estimated", result["answer"])
+        self.assertEqual(generate.call_count, 1)
+        self.assertEqual([step["stage"] for step in result["decision_trace"]],
+                         ["Candidates", "Model plan", "Validation"])
+
     def test_action_route_returns_chart_ready_patient_data(self):
         model = SimpleNamespace(config=SimpleNamespace(max_position_embeddings=16384))
         with patch("src.hipergator.patient_search.generate", return_value=(
@@ -210,15 +225,17 @@ class RetrievalTests(unittest.TestCase):
 
     def test_action_route_returns_filtered_source_records(self):
         model = SimpleNamespace(config=SimpleNamespace(max_position_embeddings=16384))
-        with patch("src.hipergator.patient_search.generate", side_effect=[
+        with patch("src.hipergator.patient_search.generate", return_value=(
             '{"action":"records","scope":"history",'
-            '"tables":["measurement"],"concept_ids":[300]}',
-            "Here are the matching measurements.",
-        ]):
+            '"tables":["measurement"],"concept_ids":[300]}'
+        )) as generate:
             result = run_patient_request(7, "show Example measurements",
                                          self.directory.name, model, Tokenizer(),
                                          {300: "Example"})
         self.assertEqual(result["kind"], "records")
+        self.assertEqual(generate.call_count, 1)
+        self.assertIn("measurement: 3", result["answer"])
+        self.assertEqual(result["decision_trace"][-1]["stage"], "Retrieval")
         measurements = next(item for item in result["evidence"] if item["table"] == "measurement")
         self.assertEqual(measurements["total_rows"], 3)
         self.assertTrue(all(row["measurement_concept_id"] == 300
