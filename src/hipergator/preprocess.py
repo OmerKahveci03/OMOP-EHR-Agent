@@ -89,6 +89,54 @@ def merge_concept_vocabularies(local_file: str, athena_file: str,
     print(f" - Wrote {row_count} combined concepts to '{write_fp}'")
     return True
 
+def preprocess_concept_ancestor(source_file: str, write_dir: str,
+                                meta_dir: str, overwrite: bool = False) -> bool:
+    """Stream Athena's concept hierarchy into a typed parquet table."""
+    columns = ["ancestor_concept_id", "descendant_concept_id",
+               "min_levels_of_separation", "max_levels_of_separation"]
+    write_fp = os.path.join(write_dir, "concept_ancestor.parquet")
+    marker_fp = os.path.join(meta_dir, "concept_ancestor_source.json")
+    source = {"size": os.path.getsize(source_file),
+              "mtime_ns": os.stat(source_file).st_mtime_ns}
+    if not overwrite and os.path.exists(write_fp) and os.path.exists(marker_fp):
+        with open(marker_fp, encoding="utf-8") as marker:
+            if json.load(marker) == source:
+                return False
+
+    header = pd.read_csv(source_file, sep="\t", nrows=0).columns.tolist()
+    if set(header) != set(columns):
+        raise ValueError(f"Unexpected CONCEPT_ANCESTOR columns: {header}")
+
+    schema = pa.schema([pa.field(column, pa.int64()) for column in columns])
+    part_fp = f"{write_fp}.part"
+    writer = pq.ParquetWriter(part_fp, schema=schema, compression="snappy")
+    row_count = 0
+    try:
+        for chunk in pd.read_csv(source_file, sep="\t", dtype="string",
+                                 usecols=columns, chunksize=100_000):
+            for column in columns:
+                chunk[column] = pd.to_numeric(chunk[column], errors="raise").astype("Int64")
+            if chunk[columns].isna().any().any():
+                raise ValueError("CONCEPT_ANCESTOR contains missing values")
+            writer.write_table(pa.Table.from_pandas(
+                chunk[columns], schema=schema, preserve_index=False))
+            row_count += len(chunk)
+    except BaseException:
+        writer.close()
+        if os.path.exists(part_fp):
+            os.remove(part_fp)
+        raise
+    writer.close()
+    os.replace(part_fp, write_fp)
+    pd.DataFrame({"dtype": "Int64", "row_count": row_count,
+                  "pct_missing": 0.0}, index=pd.Index(columns, name="column")).to_csv(
+                      os.path.join(meta_dir, "concept_ancestor_metadata.csv"))
+    with open(marker_fp, "w", encoding="utf-8") as marker:
+        json.dump(source, marker)
+    print(f" - Wrote {row_count} concept ancestor links to '{write_fp}'")
+    return True
+
+
 def raw_csv_to_parquet(raw_file: str, write_dir: str, meta_dir: str, overwrite: bool) -> None:
     """ Load the raw csv file and write to the `write_dir` as a parquet.
     
@@ -147,7 +195,8 @@ def preprocess_data(base_dir: str = HPG_BASE_DIR, max_workers: Optional[int] = N
     meta_dir: str = get_path(path_type="metadata", makedir=True, base_dir=base_dir)
     local_concepts = os.path.join(raw_dir, "2b_concept.csv")
     athena_concepts = os.path.join(base_dir, "vocabulary_download_v5", "CONCEPT.csv")
-    for source in (local_concepts, athena_concepts):
+    athena_ancestors = os.path.join(base_dir, "vocabulary_download_v5", "CONCEPT_ANCESTOR.csv")
+    for source in (local_concepts, athena_concepts, athena_ancestors):
         if not os.path.isfile(source):
             raise FileNotFoundError(f"Missing concept source: {source}")
 
@@ -176,12 +225,16 @@ def preprocess_data(base_dir: str = HPG_BASE_DIR, max_workers: Optional[int] = N
         local_file=local_concepts, athena_file=athena_concepts,
         write_dir=cleaned_dir, meta_dir=meta_dir, overwrite=overwrite,
     )
+    ancestors_updated = preprocess_concept_ancestor(
+        source_file=athena_ancestors, write_dir=cleaned_dir,
+        meta_dir=meta_dir, overwrite=overwrite,
+    )
 
     print("\nDone preprocessing data!\n")
 
     # --- Concat All Metadata ---
     master_meta_fp: str = os.path.join(meta_dir, "metadata_master.csv")
-    if overwrite or concepts_updated or not os.path.exists(master_meta_fp):
+    if overwrite or concepts_updated or ancestors_updated or not os.path.exists(master_meta_fp):
         print("Concatenating all metadata...")
 
         meta_files: list[str] = glob.glob(os.path.join(meta_dir, "*metadata.csv"))

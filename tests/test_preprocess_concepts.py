@@ -7,7 +7,9 @@ from pathlib import Path
 import pandas as pd
 
 from src.hipergator.concepts import load_concept_names
-from src.hipergator.preprocess import merge_concept_vocabularies, preprocess_data
+from src.hipergator.preprocess import (
+    merge_concept_vocabularies, preprocess_concept_ancestor, preprocess_data,
+)
 
 
 class ConceptPreprocessTests(unittest.TestCase):
@@ -27,9 +29,17 @@ class ConceptPreprocessTests(unittest.TestCase):
             (athena / "CONCEPT.csv").write_text(
                 "concept_id\tconcept_name\n456\tCreatinine\n", encoding="utf-8"
             )
+            (athena / "CONCEPT_ANCESTOR.csv").write_text(
+                "ancestor_concept_id\tdescendant_concept_id\t"
+                "min_levels_of_separation\tmax_levels_of_separation\n"
+                "123\t456\t1\t2\n", encoding="utf-8"
+            )
             preprocess_data(base_dir=str(root), max_workers=1)
             names = pd.read_parquet(root / "cleaned_data" / "concept.parquet")
             self.assertEqual(set(names["concept_id"]), {456, 2000000001})
+            ancestors = pd.read_parquet(root / "cleaned_data" / "concept_ancestor.parquet")
+            self.assertEqual(ancestors.iloc[0].tolist(), [123, 456, 1, 2])
+            self.assertTrue(pd.api.types.is_integer_dtype(ancestors["descendant_concept_id"]))
             self.assertTrue((root / "cleaned_data" / "person.parquet").exists())
             self.assertTrue((root / "cleaned_data" / "metadata" / "metadata_master.csv").exists())
 
@@ -63,6 +73,21 @@ class ConceptPreprocessTests(unittest.TestCase):
             self.assertEqual(load_concept_names(str(cleaned))[123], "Local override")
             self.assertFalse(merge_concept_vocabularies(*arguments))
             self.assertTrue(merge_concept_vocabularies(*arguments, overwrite=True))
+
+    def test_concept_ancestor_skips_unchanged_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metadata = root / "metadata"
+            metadata.mkdir()
+            source = root / "CONCEPT_ANCESTOR.csv"
+            source.write_text(
+                "ancestor_concept_id\tdescendant_concept_id\t"
+                "min_levels_of_separation\tmax_levels_of_separation\n"
+                "123\t456\t1\t1\n", encoding="utf-8"
+            )
+            args = (str(source), str(root), str(metadata))
+            self.assertTrue(preprocess_concept_ancestor(*args))
+            self.assertFalse(preprocess_concept_ancestor(*args))
 
 
 if __name__ == "__main__":

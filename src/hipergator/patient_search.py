@@ -115,9 +115,9 @@ def select_action_plan(model: PreTrainedModel,
             "when the requested calculation needs either. Choose concept_ids only from "
             "the supplied patient-specific candidates. Use [] only when the user "
             "explicitly asks about all measurements; for a named measurement "
-            "with no matching candidate choose unsupported. Select at most eight "
-            "concept IDs and write them as JSON integers, not strings. Never copy "
-            "the entire candidate list. "
+            "with no matching candidate choose unsupported. Select all and only "
+            "the candidates relevant to the question, regardless of how many "
+            "there are. Write concept IDs as JSON integers, not strings. "
             "Scope means time only: use exactly latest_encounter or history, never "
             "patient or person. Choose latest_encounter unless the question asks for history, earlier "
             "encounters, or a comparison across encounters. Use history for a list "
@@ -168,9 +168,6 @@ def select_action_plan(model: PreTrainedModel,
             return {"action": "unsupported", "reason": "Could not identify the requested measurement concepts."}
         parsed_ids.append(parsed_id)
     parsed_ids = list(dict.fromkeys(parsed_ids))
-    if len(parsed_ids) > 8:
-        return {"action": "unsupported", "reason":
-                "Could not narrow this request to a small set of measurement concepts."}
     if action in ANALYSIS_KINDS and "measurement" not in available:
         raise ValueError("Measurement table is unavailable")
     return {"action": action, "scope": scope,
