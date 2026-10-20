@@ -1,76 +1,108 @@
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
+
 function formatNumber(value) {
   return value == null ? '—' : Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 })
 }
 
-function TimeSeriesChart({ points }) {
-  const data = points.map((point) => ({ ...point, time: Date.parse(point.date) }))
-    .filter((point) => Number.isFinite(point.time) && Number.isFinite(point.value))
-  if (!data.length) return <p className="analysis-empty">No dated numeric values to plot.</p>
+function valueAxisLabel(label, unit) {
+  return `${label} (${unit === 'Unspecified' ? 'unit unspecified' : unit})`
+}
 
-  const width = 600
-  const height = 220
-  const left = 54
-  const right = 18
-  const top = 18
-  const bottom = 38
-  const times = data.map((point) => point.time)
-  const values = data.map((point) => point.value)
-  const minTime = Math.min(...times)
-  const maxTime = Math.max(...times)
-  const minValue = Math.min(...values)
-  const maxValue = Math.max(...values)
-  const x = (time) => left + (maxTime === minTime ? (width - left - right) / 2 : (time - minTime) / (maxTime - minTime) * (width - left - right))
-  const y = (value) => top + (maxValue === minValue ? (height - top - bottom) / 2 : (maxValue - value) / (maxValue - minValue) * (height - top - bottom))
+function formatDate(timestamp, includeTime = false) {
+  const date = new Date(timestamp)
+  return includeTime
+    ? date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+    : date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+}
 
+function MeasurementTooltip({ active, payload, unit }) {
+  if (!active || !payload?.length) return null
+  const point = payload[0].payload
   return (
-    <svg className="analysis-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`Time series of ${data.length} measurements`}>
-      <line x1={left} y1={top} x2={left} y2={height - bottom} className="chart-axis" />
-      <line x1={left} y1={height - bottom} x2={width - right} y2={height - bottom} className="chart-axis" />
-      <text x={left - 7} y={top + 4} textAnchor="end" className="chart-label">{formatNumber(maxValue)}</text>
-      <text x={left - 7} y={height - bottom + 4} textAnchor="end" className="chart-label">{formatNumber(minValue)}</text>
-      <text x={left} y={height - 10} className="chart-label">{new Date(minTime).toLocaleDateString()}</text>
-      <text x={width - right} y={height - 10} textAnchor="end" className="chart-label">{new Date(maxTime).toLocaleDateString()}</text>
-      {data.length > 1 && <polyline points={data.map((point) => `${x(point.time)},${y(point.value)}`).join(' ')} className="chart-line" />}
-      {data.map((point, index) => (
-        <circle key={`${point.measurement_id}-${index}`} cx={x(point.time)} cy={y(point.value)} r="4" className="chart-point">
-          <title>{`${point.date}: ${formatNumber(point.value)} (measurement ${point.measurement_id})`}</title>
-        </circle>
-      ))}
-    </svg>
+    <div className="analysis-tooltip">
+      <strong>{formatDate(point.time, true)}</strong>
+      <span>{formatNumber(point.value)} {unit === 'Unspecified' ? '(unit unspecified)' : unit}</span>
+      <small>Measurement ID: {point.measurement_id}</small>
+    </div>
   )
 }
 
-function DistributionChart({ bins }) {
-  if (!bins.length) return <p className="analysis-empty">No numeric values to plot.</p>
-  const width = 600
-  const height = 220
-  const left = 54
-  const right = 18
-  const top = 18
-  const bottom = 38
-  const plotWidth = width - left - right
-  const plotHeight = height - top - bottom
-  const maxCount = Math.max(1, ...bins.map((bin) => bin.count))
-  const barWidth = plotWidth / bins.length
+function BinTooltip({ active, payload, unit, lastEnd }) {
+  if (!active || !payload?.length) return null
+  const bin = payload[0].payload
+  const endBracket = bin.end === lastEnd ? ']' : ')'
+  return (
+    <div className="analysis-tooltip">
+      <strong>{`[${formatNumber(bin.start)}, ${formatNumber(bin.end)}${endBracket} ${unit === 'Unspecified' ? '' : unit}`}</strong>
+      <span>{formatNumber(bin.count)} measurements</span>
+    </div>
+  )
+}
+
+function TimeSeriesChart({ points, label, unit }) {
+  const data = points.map((point) => ({ ...point, time: Date.parse(point.date) }))
+    .filter((point) => Number.isFinite(point.time) && Number.isFinite(point.value))
+    .sort((left, right) => left.time - right.time)
+  if (!data.length) return <p className="analysis-empty">No dated numeric values to plot.</p>
+
+  const minTime = data[0].time
+  const maxTime = data.at(-1).time
+  const includeTime = maxTime - minTime <= 48 * 60 * 60 * 1000
+  const timeDomain = minTime === maxTime ? [minTime - 60 * 60 * 1000, maxTime + 60 * 60 * 1000] : [minTime, maxTime]
 
   return (
-    <svg className="analysis-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`Distribution histogram with ${bins.length} bins`}>
-      <line x1={left} y1={top} x2={left} y2={height - bottom} className="chart-axis" />
-      <line x1={left} y1={height - bottom} x2={width - right} y2={height - bottom} className="chart-axis" />
-      <text x={left - 7} y={top + 4} textAnchor="end" className="chart-label">{maxCount}</text>
-      <text x={left - 7} y={height - bottom + 4} textAnchor="end" className="chart-label">0</text>
-      <text x={left} y={height - 10} className="chart-label">{formatNumber(bins[0].start)}</text>
-      <text x={width - right} y={height - 10} textAnchor="end" className="chart-label">{formatNumber(bins.at(-1).end)}</text>
-      {bins.map((bin, index) => {
-        const barHeight = bin.count / maxCount * plotHeight
-        return (
-          <rect key={index} x={left + index * barWidth + 1} y={height - bottom - barHeight}
-            width={Math.max(1, barWidth - 2)} height={barHeight} className="chart-bar">
-            <title>{`${formatNumber(bin.start)}–${formatNumber(bin.end)}: ${bin.count}`}</title>
-          </rect>
-        )
-      })}
-    </svg>
+    <div className="analysis-chart" role="img" aria-label={`${label} over time, ${data.length} measurements in ${unit}`}>
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={data} margin={{ top: 12, right: 18, bottom: 18, left: 18 }} accessibilityLayer>
+          <CartesianGrid stroke="#e3eae6" strokeDasharray="3 3" />
+          <XAxis dataKey="time" type="number" domain={timeDomain} scale="time"
+            tickFormatter={(time) => formatDate(time, includeTime)} minTickGap={32}
+            tick={{ fill: '#667d77', fontSize: 11 }} height={55}
+            label={{ value: 'Measurement date and time', position: 'insideBottom', offset: -12, fill: '#526b62', fontSize: 12 }} />
+          <YAxis type="number" domain={['auto', 'auto']} tickFormatter={formatNumber}
+            tick={{ fill: '#667d77', fontSize: 11 }} width={62}
+            label={{ value: valueAxisLabel(label, unit), angle: -90, position: 'insideLeft', fill: '#526b62', fontSize: 12 }} />
+          <Tooltip content={<MeasurementTooltip unit={unit} />} />
+          <Line dataKey="value" type="linear" stroke="#24745e" strokeWidth={2}
+            dot={{ r: 3, fill: '#24745e' }} activeDot={{ r: 5 }} isAnimationActive={false} />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  )
+}
+
+function DistributionChart({ bins, label, unit }) {
+  if (!bins.length) return <p className="analysis-empty">No numeric values to plot.</p>
+  const data = bins.map((bin) => ({ ...bin, midpoint: (bin.start + bin.end) / 2 }))
+
+  return (
+    <>
+      <div className="analysis-chart" role="img" aria-label={`Distribution of ${label}: measurement count by ${unit} value range`}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={data} margin={{ top: 12, right: 18, bottom: 18, left: 18 }} barCategoryGap="2%" accessibilityLayer>
+            <CartesianGrid stroke="#e3eae6" strokeDasharray="3 3" vertical={false} />
+            <XAxis dataKey="midpoint" tickFormatter={formatNumber} minTickGap={12}
+              tick={{ fill: '#667d77', fontSize: 11 }} height={55}
+              label={{ value: valueAxisLabel(label, unit), position: 'insideBottom', offset: -12, fill: '#526b62', fontSize: 12 }} />
+            <YAxis allowDecimals={false} domain={[0, 'auto']} tick={{ fill: '#667d77', fontSize: 11 }} width={62}
+              label={{ value: 'Number of measurements', angle: -90, position: 'insideLeft', fill: '#526b62', fontSize: 12 }} />
+            <Tooltip content={<BinTooltip unit={unit} lastEnd={data.at(-1).end} />} />
+            <Bar dataKey="count" fill="#24745e" isAnimationActive={false} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      <p className="analysis-chart-note">Each bar counts measurements in a value range; the x-axis shows the range midpoint. Hover for exact bounds.</p>
+    </>
   )
 }
 
@@ -84,8 +116,8 @@ export default function AnalysisResult({ analysis }) {
         <section className="analysis-series" key={`${series.concept_id}-${series.unit_concept_id}-${series.unit}`}>
           <h3>{series.label} <span>({series.concept_id})</span></h3>
           <p>{series.numeric_count} numeric values · {series.excluded_count} excluded · Unit: {series.unit}</p>
-          {analysis.kind === 'time_series' && <TimeSeriesChart points={series.points} />}
-          {analysis.kind === 'distribution' && <DistributionChart bins={series.bins} />}
+          {analysis.kind === 'time_series' && <TimeSeriesChart points={series.points} label={series.label} unit={series.unit} />}
+          {analysis.kind === 'distribution' && <DistributionChart bins={series.bins} label={series.label} unit={series.unit} />}
           {analysis.kind === 'statistics' && (
             <dl className="analysis-stats">
               {Object.entries(series.stats).map(([name, value]) => (
@@ -95,6 +127,7 @@ export default function AnalysisResult({ analysis }) {
           )}
         </section>
       ))}
+      {analysis.series.length > 1 && <p className="analysis-context">Each chart retains its concept and source unit label; values are not converted or combined.</p>}
     </div>
   )
 }

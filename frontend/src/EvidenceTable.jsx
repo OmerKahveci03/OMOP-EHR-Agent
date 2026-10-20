@@ -14,7 +14,7 @@ export default function EvidenceTable({ item }) {
         </div>
         <span className="evidence-count">
           {item.aggregation
-            ? `${item.total_rows} groups from ${item.source_rows} measurements`
+            ? `${item.total_rows} groups from ${item.source_rows} ${item.aggregation === 'conditions' ? 'condition records' : 'measurements'}`
             : `${item.total_rows} matching ${item.total_rows === 1 ? 'row' : 'rows'}`}
         </span>
       </div>

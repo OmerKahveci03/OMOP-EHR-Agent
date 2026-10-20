@@ -199,20 +199,63 @@ class RetrievalTests(unittest.TestCase):
 
     def test_visit_list_skips_measurement_catalog_and_uses_history(self):
         question = "Show me this patient's visits, with the most recent visit first."
-        with patch("src.hipergator.patient_search.generate", return_value=(
+        with patch("src.hipergator.patient_search.generate", side_effect=[
             '{"action":"records","scope":"latest_encounter",'
-            '"tables":["visit_occurrence"]}'
-        )) as generate, patch(
+            '"tables":["visit_occurrence"]}',
+            "Two visits are recorded [visit_occurrence:10] [visit_occurrence:11].",
+        ]) as generate, patch(
             "src.hipergator.patient_search.load_measurement_ancestors"
         ) as load_ancestors:
             result = run_patient_request(
                 7, question, self.directory.name, SimpleNamespace(), Tokenizer(), {},
             )
-        self.assertEqual(generate.call_count, 1)
+        self.assertEqual(generate.call_count, 2)
         load_ancestors.assert_not_called()
         self.assertEqual(result["evidence"][1]["total_rows"], 2)
         self.assertEqual(result["evidence"][1]["retrieval_scope"], "history")
         self.assertNotIn("Candidates", [step["stage"] for step in result["decision_trace"]])
+
+    def test_condition_history_supplies_complete_summary_for_generated_answer(self):
+        root = Path(self.directory.name)
+        pd.DataFrame([
+            {"person_id": 7, "condition_occurrence_id": index,
+             "visit_occurrence_id": 10 if index == 0 else 11,
+             "condition_concept_id": 400 if index < 100 else 401,
+             "condition_source_value": "Source condition",
+             "condition_start_date": "2200-01-01" if index == 0 else "2201-08-12"}
+            for index in range(101)
+        ]).to_parquet(root / "condition_occurrence.parquet")
+        with patch("src.hipergator.patient_search.generate", side_effect=[
+            '{"action":"records","scope":"history",'
+            '"tables":["condition_occurrence"]}',
+            "Condition A appears in the record from 2200-01-01 to 2201-08-12 "
+            "[condition_summary:1]. Condition B also appears [condition_summary:2].",
+        ]) as generate:
+            result = run_patient_request(
+                7, "Which conditions appear and when?", self.directory.name,
+                SimpleNamespace(), Tokenizer(), {400: "Condition A", 401: "Condition B"},
+            )
+        self.assertEqual(generate.call_count, 2)
+        self.assertIn("Condition A appears", result["answer"])
+        raw = next(item for item in result["evidence"] if item["table"] == "condition_occurrence")
+        summary = next(item for item in result["evidence"] if item["table"] == "condition_summary")
+        self.assertEqual(len(raw["shown_rows"]), 100)
+        self.assertEqual(summary["source_rows"], 101)
+        self.assertEqual(summary["total_rows"], 2)
+        self.assertEqual(summary["shown_rows"][0]["first_date"], "2200-01-01")
+        self.assertEqual(summary["shown_rows"][0]["last_date"], "2201-08-12")
+        self.assertIn("condition_summary", generate.call_args.kwargs["user"])
+
+    def test_record_answer_rejects_number_missing_from_evidence(self):
+        with patch("src.hipergator.patient_search.generate", side_effect=[
+            '{"action":"records","scope":"history","tables":["visit_occurrence"]}',
+            "An invented value of 64.2 is recorded [visit_occurrence:10].",
+        ]):
+            result = run_patient_request(
+                7, "Show visits", self.directory.name,
+                SimpleNamespace(), Tokenizer(), {},
+            )
+        self.assertIn("could not be verified", result["answer"])
 
     def test_rate_calculation_cannot_fall_through_to_generated_record_answer(self):
         with patch("src.hipergator.patient_search.generate", return_value=(
@@ -249,15 +292,16 @@ class RetrievalTests(unittest.TestCase):
         with patch("src.hipergator.patient_search.generate", side_effect=[
             '{"action":"records","scope":"history","tables":["measurement"]}',
             '{"action":"records","scope":"history",'
-            '"tables":["measurement"],"concept_ids":[300]}'
+            '"tables":["measurement"],"concept_ids":[300]}',
+            "Example measurements are recorded [measurement:1].",
         ]) as generate:
             result = run_patient_request(7, "show Example measurements",
                                          self.directory.name, model, Tokenizer(),
                                          {300: "Example"})
         self.assertEqual(result["kind"], "records")
-        self.assertEqual(generate.call_count, 2)
-        self.assertIn("measurement: 3", result["answer"])
-        self.assertEqual(result["decision_trace"][-1]["stage"], "Retrieval")
+        self.assertEqual(generate.call_count, 3)
+        self.assertIn("Example measurements", result["answer"])
+        self.assertEqual(result["decision_trace"][-1]["stage"], "Answer")
         measurements = next(item for item in result["evidence"] if item["table"] == "measurement")
         self.assertEqual(measurements["total_rows"], 3)
         self.assertTrue(all(row["measurement_concept_id"] == 300

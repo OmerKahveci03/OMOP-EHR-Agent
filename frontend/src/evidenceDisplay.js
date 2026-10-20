@@ -5,6 +5,7 @@ export const tableColumns = {
   visit_occurrence: ['visit_occurrence_id', 'visit_start_datetime', 'visit_end_datetime', 'visit_source_value', 'admitting_source_value', 'discharge_to_source_value'],
   visit_detail: ['visit_detail_id', 'visit_detail_start_datetime', 'visit_detail_end_datetime', 'visit_detail_source_value', 'admitting_source_value', 'discharge_to_source_value'],
   condition_occurrence: ['condition_occurrence_id', 'condition_start_datetime', 'condition_end_datetime', 'condition_source_value', 'condition_concept_id'],
+  condition_summary: ['condition_name', 'condition_concept_id', 'count', 'first_date', 'last_date'],
   drug_exposure: ['drug_exposure_id', 'drug_exposure_start_datetime', 'drug_exposure_end_datetime', 'drug_source_value', 'quantity', 'dose_unit_source_value', 'route_source_value'],
   procedure_occurrence: ['procedure_occurrence_id', 'procedure_datetime', 'procedure_source_value', 'quantity'],
   device_exposure: ['device_exposure_id', 'device_exposure_start_datetime', 'device_exposure_end_datetime', 'device_source_value', 'quantity', 'unique_device_id'],

@@ -431,6 +431,91 @@ def requires_derived_calculation(request: str) -> bool:
     )
 
 
+def summarize_condition_history(rows: pd.DataFrame,
+                                concept_names: dict[int, str], scope: str) -> dict:
+    """Provide complete condition counts and date ranges as evidence."""
+    groups: dict[tuple[int | None, str], dict] = {}
+    for _, row in rows.iterrows():
+        raw_id = row.get("condition_concept_id")
+        concept_id = int(raw_id) if pd.notna(raw_id) else None
+        source = row.get("condition_source_value")
+        label = (concept_names.get(concept_id) if concept_id else None) or (
+            str(source) if pd.notna(source) and str(source).strip() else
+            f"Concept {concept_id}" if concept_id else "Unnamed condition"
+        )
+        key = (concept_id, label)
+        item = groups.setdefault(key, {"condition_concept_id": concept_id,
+                                       "condition_name": label, "count": 0,
+                                       "first_date": None, "last_date": None})
+        item["count"] += 1
+        date = row.get("condition_start_datetime")
+        if pd.isna(date):
+            date = row.get("condition_start_date")
+        if pd.notna(date):
+            recorded = str(date)[:10]
+            item["first_date"] = min(item["first_date"] or recorded, recorded)
+            item["last_date"] = max(item["last_date"] or recorded, recorded)
+    summaries = sorted(groups.values(), key=lambda item: (-item["count"], item["condition_name"]))
+    for index, item in enumerate(summaries, start=1):
+        item["summary_id"] = index
+    return {"table": "condition_summary", "source_table": "condition_occurrence",
+                "aggregation": "conditions",
+                "source_rows": len(rows), "total_rows": len(summaries),
+                "shown_rows": summaries, "retrieval_scope": scope}
+
+
+def generate_record_answer(model: PreTrainedModel,
+                           tokenizer: PreTrainedTokenizerBase,
+                           request: str, person_id: int, scope: str,
+                           evidence: list[dict]) -> str:
+    """Verbalize retrieved facts, accepting only references to returned evidence."""
+    summary_tables = {item["source_table"] for item in evidence
+                      if item.get("aggregation") and item.get("source_table")}
+    model_evidence = [
+        {**item, "shown_rows": item["shown_rows"][:5]}
+        if item["table"] in summary_tables else item
+        for item in evidence
+    ]
+    model_evidence.sort(key=lambda item: not bool(item.get("aggregation")))
+    context_limit = min(5000, getattr(getattr(model, "config", None),
+                                      "max_position_embeddings", 8192) - 1024)
+    fitted = fit_evidence(model_evidence, tokenizer, context_limit)
+    answer = generate(
+        model=model, tokenizer=tokenizer,
+        system=(
+            "You are a patient data navigation assistant. Answer in natural language "
+            "using only the supplied record facts. Describe recorded names, values, "
+            "dates, counts, and retrieval limits. Do not infer diagnoses, physiology, "
+            "or missing values. Do not calculate or estimate new clinical quantities. "
+            "For each factual claim cite a supplied row as [table:record_id] or a "
+            "supplied summary as [table:summary_id]. Use only IDs actually shown. "
+            "If the evidence does not answer the question, say so. Dates are "
+            "de-identified; do not call them future events."
+        ),
+        user=f"Question: {request}\nPerson ID: {person_id}\nScope: {scope}\n"
+             f"Evidence: {json.dumps(fitted)}",
+        max_new_tokens=512,
+    )
+    allowed = {
+        (item["table"], str(row[id_field]))
+        for item in fitted
+        for row in item["shown_rows"]
+        for id_field in ("summary_id" if item.get("aggregation") else
+                         f"{item['table']}_id",)
+        if row.get(id_field) is not None
+    }
+    citations = re.findall(r"\[([a-z_]+):([^\]]+)\]", answer)
+    evidence_numbers = set(re.findall(r"\b\d+(?:\.\d+)?\b", json.dumps(fitted)))
+    answer_numbers = set(re.findall(r"\b\d+(?:\.\d+)?\b", answer))
+    if (not citations or any(citation not in allowed for citation in citations)
+            or not answer_numbers.issubset(evidence_numbers)):
+        counts = ", ".join(f"{item['table']}: {item['total_rows']}"
+                           for item in evidence if not item.get("aggregation"))
+        return (f"Retrieved patient records ({counts}). The generated summary could "
+                "not be verified against the returned records; review the evidence below.")
+    return answer
+
+
 def run_patient_request(person_id: int, request: str, data_dir: str,
                         model: PreTrainedModel, tokenizer: PreTrainedTokenizerBase,
                         concept_names: dict[int, str]) -> dict:
@@ -488,9 +573,21 @@ def run_patient_request(person_id: int, request: str, data_dir: str,
             include_measurement_rows=True,
             generate_answer=False,
         )
+        if "condition_occurrence" in selected:
+            encounter = (latest_encounter(data_dir, person_id)
+                         if plan["scope"] == "latest_encounter" else None)
+            condition_rows = patient_table(data_dir, "condition_occurrence", person_id,
+                                           plan["scope"], encounter)
+            condition_summary = summarize_condition_history(
+                condition_rows, concept_names, plan["scope"])
+            evidence.append(condition_summary)
         trace.append({"stage": "Retrieval", "detail": "; ".join(
             f"{item['table']}: {item['total_rows']} rows ({len(item['shown_rows'])} shown)"
             for item in evidence)})
+        answer = generate_record_answer(model, tokenizer, request, person_id,
+                                        plan["scope"], evidence)
+        trace.append({"stage": "Answer", "detail":
+                      "Generated a record summary and checked its citations against returned evidence."})
         return {"kind": "records", "answer": answer, "evidence": evidence,
                 "analysis": None, "decision_trace": trace}
 

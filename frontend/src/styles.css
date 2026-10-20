@@ -343,15 +343,27 @@
         }
 
         .analysis-chart {
-          display: block;
           width: 100%;
-          height: auto;
-          overflow: visible;
+          height: 300px;
+          min-width: 0;
+        }
 
-          .chart-axis { stroke: #8ca99b; stroke-width: 1; }
-          .chart-label { fill: #667d77; font-size: 11px; }
-          .chart-line { fill: none; stroke: #24745e; stroke-width: 2; }
-          .chart-point, .chart-bar { fill: #24745e; }
+        .analysis-chart-note {
+          margin: 0 0 4px;
+        }
+
+        .analysis-tooltip {
+          display: grid;
+          gap: 4px;
+          padding: 10px 12px;
+          border: 1px solid #d7e4dc;
+          border-radius: 8px;
+          background: #fff;
+          color: #23433d;
+          box-shadow: 0 8px 24px #173e3020;
+          font-size: 12px;
+
+          small { color: #667d77; }
         }
 
         .analysis-stats {
